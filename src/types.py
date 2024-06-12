@@ -11,6 +11,14 @@ class EventType(str, Enum):
     DEPARTURE = "Departure"
     TRANSIT = "Transit"
 
+    def __str__(self):
+        if self.value == "Arrival":
+            return "arriving"
+        elif self.value == "Departure":
+            return "departing"
+        else:
+            return "transiting"
+
 
 @dataclass
 class Event:
@@ -21,6 +29,15 @@ class Event:
     source_station: Optional[str] = None # only for transit
     destination_station: Optional[str] = None  # only for transit
     distance: Optional[int] = None  # only for transit
+
+    def __repr__(self):
+        if self.event_type == EventType.ARRIVAL:
+            return f"Train number: {self.train_no} {self.train_name} is {self.event_type} at {self.destination_station} at {self.time} from {self.source_station}"
+        elif self.event_type == EventType.DEPARTURE:
+            return f"Train number: {self.train_no} {self.train_name} is {self.event_type} at {self.time} to {self.destination_station} from {self.source_station}"
+        else:
+            return f"Train number: {self.train_no} {self.train_name} is {self.event_type} from {self.source_station} to {self.destination_station} covering {self.distance} kilometers."
+
 
 
 @dataclass
