@@ -1,5 +1,3 @@
-
-
 from dataclasses import dataclass
 import datetime
 from enum import Enum, auto
@@ -26,7 +24,7 @@ class Event:
     train_name: str
     time: datetime.time
     event_type: EventType
-    source_station: Optional[str] = None # only for transit
+    source_station: Optional[str] = None  # only for transit
     destination_station: Optional[str] = None  # only for transit
     distance: Optional[int] = None  # only for transit
 
@@ -37,7 +35,6 @@ class Event:
             return f"Train number: {self.train_no} {self.train_name} is {self.event_type} at {self.time} to {self.destination_station} from {self.source_station}"
         else:
             return f"Train number: {self.train_no} {self.train_name} is {self.event_type} from {self.source_station} to {self.destination_station} covering {self.distance} kilometers."
-
 
 
 @dataclass
@@ -52,4 +49,3 @@ class Train:
     train_no: int
     train_name: str
     events: List[Event]
-

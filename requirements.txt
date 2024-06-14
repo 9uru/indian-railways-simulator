@@ -1,3 +1,6 @@
 pandas
 numpy
 jupyter
+click
+prompt_toolkit
+black
