@@ -4,3 +4,4 @@ jupyter
 click
 prompt_toolkit
 black
+pytest

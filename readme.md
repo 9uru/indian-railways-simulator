@@ -9,3 +9,27 @@ This is a fun project rooted in a passion for the complex chaotic beauty that is
 
 
 Thanks to @itzmeanjan for the data
+
+## Run
+
+```bash
+python -m venv venv
+./venv/bin/pip install -r requirements.txt
+./venv/bin/python -m src.parse
+```
+
+## Commands
+
+- `list trains`
+- `next`
+- `prev`
+- `show train <train number>`
+- `list stations`
+- `show station <station code>`
+- `exit`
+
+## Test
+
+```bash
+./venv/bin/python -m pytest
+```

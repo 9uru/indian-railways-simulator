@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 import datetime
-from enum import Enum, auto
+from enum import Enum
 from typing import List, Optional
 
 
@@ -20,19 +20,21 @@ class EventType(str, Enum):
 
 @dataclass
 class Event:
-    train_no: int
+    train_no: str
     train_name: str
     time: datetime.time
     event_type: EventType
     source_station: Optional[str] = None  # only for transit
     destination_station: Optional[str] = None  # only for transit
-    distance: Optional[int] = None  # only for transit
+    distance: Optional[float] = None  # only for transit
+    day_offset: int = 0
 
     def __repr__(self):
+        day_suffix = f" +{self.day_offset}d" if self.day_offset else ""
         if self.event_type == EventType.ARRIVAL:
-            return f"Train number: {self.train_no} {self.train_name} is {self.event_type} at {self.destination_station} at {self.time} from {self.source_station}"
+            return f"Train number: {self.train_no} {self.train_name} is {self.event_type} at {self.destination_station} at {self.time}{day_suffix} from {self.source_station}"
         elif self.event_type == EventType.DEPARTURE:
-            return f"Train number: {self.train_no} {self.train_name} is {self.event_type} at {self.time} to {self.destination_station} from {self.source_station}"
+            return f"Train number: {self.train_no} {self.train_name} is {self.event_type} at {self.time}{day_suffix} to {self.destination_station} from {self.source_station}"
         else:
             return f"Train number: {self.train_no} {self.train_name} is {self.event_type} from {self.source_station} to {self.destination_station} covering {self.distance} kilometers."
 
@@ -46,6 +48,6 @@ class Station:
 
 @dataclass
 class Train:
-    train_no: int
+    train_no: str
     train_name: str
     events: List[Event]

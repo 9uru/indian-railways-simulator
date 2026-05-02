@@ -2,20 +2,38 @@
 import datetime
 import time
 from typing import Dict, List, Tuple
+
 import pandas as pd
 from src.types import Event, Station, Train
 from src.types import EventType
 from prompt_toolkit import HTML
 from prompt_toolkit import print_formatted_text, prompt
-from prompt_toolkit.application import Application
-from prompt_toolkit.shortcuts import clear
-from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.layout import Layout
-from prompt_toolkit.layout.containers import HSplit, Window
-from prompt_toolkit.layout.controls import FormattedTextControl
-from prompt_toolkit.widgets import Frame, TextArea
 from prompt_toolkit.styles import Style
+
+
+def scheduled_datetime(
+    event: Event, service_date: datetime.date, use_day_offset: bool = True
+) -> datetime.datetime:
+    day_offset = event.day_offset if use_day_offset else 0
+    return datetime.datetime.combine(
+        service_date + datetime.timedelta(days=day_offset), event.time
+    )
+
+
+def _remove_terminal_placeholders(train_info: pd.DataFrame) -> pd.DataFrame:
+    first_seq = train_info["SEQ"].min()
+    last_seq = train_info["SEQ"].max()
+    terminal_placeholder = (
+        (train_info["SEQ"] == first_seq) & (train_info["Type"] == "Arrival")
+    ) | ((train_info["SEQ"] == last_seq) & (train_info["Type"] == "Departure"))
+    return train_info.loc[~terminal_placeholder].copy()
+
+
+def _segment_distance(row: pd.Series, next_row: pd.Series | None) -> float | None:
+    if next_row is None:
+        return None
+    return max(0.0, float(next_row["Distance"]) - float(row["Distance"]))
 
 
 def load_data(filename: str) -> Tuple[Dict[int, Train], Dict[str, Station]]:
@@ -50,20 +68,30 @@ def load_data(filename: str) -> Tuple[Dict[int, Train], Dict[str, Station]]:
     grouped = df.groupby("Train No")
 
     for train_no, train_info in grouped:
+        train_info = train_info.copy()
         train_info["Type_Rank"] = train_info["Type"].map({"Arrival": 0, "Departure": 1})
         train_info = train_info.sort_values(by=["SEQ", "Type_Rank"]).drop(
             columns=["Type_Rank"]
         )
+        train_info = _remove_terminal_placeholders(train_info)
+        if train_info.empty:
+            continue
+
         train = Train(
             train_no=train_info.iloc[0]["Train No"],
             train_name=train_info.iloc[0]["Train Name"],
             events=[],
         )
 
+        day_offset = 0
+        previous_time = None
         for i in range(len(train_info)):
             row = train_info.iloc[i]
             prev_row = train_info.iloc[i - 1] if i > 0 else None
             next_row = train_info.iloc[i + 1] if i < len(train_info) - 1 else None
+            if previous_time is not None and row["Time"] < previous_time:
+                day_offset += 1
+            previous_time = row["Time"]
 
             station_code = row["Station Code"]
 
@@ -92,6 +120,7 @@ def load_data(filename: str) -> Tuple[Dict[int, Train], Dict[str, Station]]:
                 source_station=source_station,
                 destination_station=destination_station,
                 distance=None,
+                day_offset=day_offset,
             )
 
             train.events.append(event)
@@ -110,7 +139,8 @@ def load_data(filename: str) -> Tuple[Dict[int, Train], Dict[str, Station]]:
                     destination_station=(
                         next_row["Station Name"] if next_row is not None else None
                     ),
-                    distance=next_row["Distance"] if next_row is not None else None,
+                    distance=_segment_distance(row, next_row),
+                    day_offset=day_offset,
                 )
                 train.events.append(transit_event)
 
@@ -123,39 +153,55 @@ def load_data(filename: str) -> Tuple[Dict[int, Train], Dict[str, Station]]:
     return trains_by_number, stations_by_code
 
 
-def simulate_events(events: List[Event], cadence: float):
-    simulated_time = datetime.datetime.combine(datetime.date.today(), events[0].time)
+def simulate_events(events: List[Event], cadence: float, use_day_offsets: bool = True):
+    if not events:
+        return
+
+    service_date = datetime.date.today()
+    simulated_time = scheduled_datetime(events[0], service_date, use_day_offsets)
     event_index = 0
     last_output_length = 0
     cadence_normal = cadence
     cadence_skip = 3 * cadence
     while event_index < len(events):
         output = f"<ansigreen>{simulated_time}:</ansigreen>"
-        print(f"\r{' ' * last_output_length}\r", end='')  # Clear the previous line
+        print(f"\r{' ' * last_output_length}\r", end="")  # Clear the previous line
         print_formatted_text(HTML(output), end=" ")
         last_output_length = len(output)
-        
+
         current_event = events[event_index]
-        event_time = datetime.datetime.combine(datetime.date.today(), current_event.time)
-        if event_time <= simulated_time:
+        event_time = scheduled_datetime(current_event, service_date, use_day_offsets)
+        emitted_event = False
+        while event_time <= simulated_time:
             print_formatted_text(HTML(f"{current_event}"))
             cadence = cadence_normal
             event_index += 1
-        else:
-            cadence = cadence_skip
+            emitted_event = True
+            if event_index >= len(events):
+                break
+            current_event = events[event_index]
+            event_time = scheduled_datetime(
+                current_event, service_date, use_day_offsets
+            )
+        if emitted_event:
+            continue
+        cadence = cadence_skip
         time.sleep(60.0 / cadence)
         simulated_time += datetime.timedelta(minutes=1)
+
 
 def main():
     trains_by_number, stations_by_code = load_data("data/data_reorged.csv")
 
-    style = Style.from_dict({
-        'output': 'ansigreen',
-    })
+    style = Style.from_dict(
+        {
+            "output": "ansigreen",
+        }
+    )
 
     bindings = KeyBindings()
 
-    @bindings.add('c-q')
+    @bindings.add("c-q")
     def exit_(event):
         event.app.exit()
 
@@ -165,46 +211,68 @@ def main():
         train_numbers = list(trains.keys())
         for i in range(start_index, min(end_index, len(train_numbers))):
             train_no = train_numbers[i]
-            print_formatted_text(HTML(f"<ansigreen>{train_no}</ansigreen>: {trains[train_no].train_name}"))
+            print_formatted_text(
+                HTML(
+                    f"<ansigreen>{train_no}</ansigreen>: "
+                    f"{trains[train_no].train_name}"
+                )
+            )
 
         if end_index < len(train_numbers):
-            print_formatted_text(HTML("<ansiwhite>Type 'next' to see more trains.</ansiwhite>"))
+            print_formatted_text(
+                HTML("<ansiwhite>Type 'next' to see more trains.</ansiwhite>")
+            )
         if start_index > 0:
-            print_formatted_text(HTML("<ansiwhite>Type 'prev' to see previous trains.</ansiwhite>"))
+            print_formatted_text(
+                HTML("<ansiwhite>Type 'prev' to see previous trains.</ansiwhite>")
+            )
 
     current_page = 0
 
     while True:
-        command = prompt('> ', style=style, key_bindings=bindings)
-        if command in ['exit', 'quit']:
+        command = prompt("> ", style=style, key_bindings=bindings)
+        if command in ["exit", "quit"]:
             break
-        elif command == 'list trains':
+        elif command == "list trains":
             current_page = 0
             list_trains(trains_by_number, current_page)
-        elif command == 'next':
+        elif command == "next":
             current_page += 1
             list_trains(trains_by_number, current_page)
-        elif command == 'prev' and current_page > 0:
+        elif command == "prev" and current_page > 0:
             current_page -= 1
             list_trains(trains_by_number, current_page)
-        elif command.startswith('show train'):
+        elif command.startswith("show train"):
             train_no = command.split()[-1]
+            if not train_no.isdigit():
+                print_formatted_text(HTML("<ansired>Invalid train number.</ansired>"))
+                continue
             train_no = int(train_no)
             if train_no in trains_by_number:
                 simulate_events(trains_by_number[train_no].events, 60.0)
             else:
                 print_formatted_text(HTML("<ansired>Invalid train number.</ansired>"))
-        elif command == 'list stations':
+        elif command == "list stations":
             for station_code in stations_by_code:
-                print_formatted_text(HTML(f"<ansigreen>{station_code}</ansigreen>: {stations_by_code[station_code].station_name}"))
-        elif command.startswith('show station'):
+                print_formatted_text(
+                    HTML(
+                        f"<ansigreen>{station_code}</ansigreen>: "
+                        f"{stations_by_code[station_code].station_name}"
+                    )
+                )
+        elif command.startswith("show station"):
             station_code = command.split()[-1]
             if station_code in stations_by_code:
-                simulate_events(stations_by_code[station_code].events, 60.0)
+                simulate_events(
+                    stations_by_code[station_code].events,
+                    60.0,
+                    use_day_offsets=False,
+                )
             else:
                 print_formatted_text(HTML("<ansired>Invalid station code.</ansired>"))
         else:
             print_formatted_text(HTML("<ansired>Unknown command.</ansired>"))
+
 
 if __name__ == "__main__":
     main()
