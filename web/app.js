@@ -1,5 +1,10 @@
 const DATA_ROOT = "../data/processed";
 const DEFAULT_STATION_AMBIENCE = "./assets/station-ambience.mp3";
+const TRAIN_SOUND_POOL = [
+  "./assets/train-passing-level-crossing.mp3",
+  "./assets/train-rural-horn-wind.mp3",
+  "./assets/train-vestibule-interior.mp3",
+];
 const PA_LOOKAHEAD_MINUTES = 15;
 const INDIA_BOUNDS = {
   minLat: 6.2,
@@ -68,10 +73,14 @@ const state = {
   audio: null,
   stationAmbienceAudio: null,
   stationAmbienceUrl: null,
+  trainTravelAudio: null,
+  currentTrainSound: null,
+  trainSoundQueue: [],
   autoPaEnabled: true,
   autoPaLastAt: 0,
   autoPaIndex: 0,
   activeAnnouncementKey: null,
+  activeStationEvent: null,
   announcedEvents: new Set(),
   announcementQueue: [],
   announcementBusy: false,
@@ -132,6 +141,46 @@ function formatMinutes(value) {
   const hours = String(Math.floor(wrapped / 60)).padStart(2, "0");
   const minutes = String(wrapped % 60).padStart(2, "0");
   return `${hours}:${minutes}`;
+}
+
+function activeMapBounds() {
+  if (state.mode !== "train") {
+    return INDIA_BOUNDS;
+  }
+  const train = state.trains[state.selectedTrainNo];
+  const points = train?.mappedRoute
+    .map((code) => state.stations[code])
+    .filter((station) => station?.lat != null && station?.lon != null);
+  if (!points || points.length < 2) {
+    return INDIA_BOUNDS;
+  }
+
+  let minLat = Math.min(...points.map((point) => point.lat));
+  let maxLat = Math.max(...points.map((point) => point.lat));
+  let minLon = Math.min(...points.map((point) => point.lon));
+  let maxLon = Math.max(...points.map((point) => point.lon));
+  const latPadding = Math.max(0.35, (maxLat - minLat) * 0.28);
+  const lonPadding = Math.max(0.35, (maxLon - minLon) * 0.28);
+  minLat = Math.max(INDIA_BOUNDS.minLat, minLat - latPadding);
+  maxLat = Math.min(INDIA_BOUNDS.maxLat, maxLat + latPadding);
+  minLon = Math.max(INDIA_BOUNDS.minLon, minLon - lonPadding);
+  maxLon = Math.min(INDIA_BOUNDS.maxLon, maxLon + lonPadding);
+
+  return {
+    minLat,
+    maxLat: Math.max(maxLat, minLat + 0.5),
+    minLon,
+    maxLon: Math.max(maxLon, minLon + 0.5),
+  };
+}
+
+function projectPoint(lat, lon, bounds = activeMapBounds()) {
+  return {
+    x: ((lon - bounds.minLon) / (bounds.maxLon - bounds.minLon)) * els.canvas.width,
+    y:
+      (1 - (lat - bounds.minLat) / (bounds.maxLat - bounds.minLat)) *
+      els.canvas.height,
+  };
 }
 
 function activeTimelineEvents() {
@@ -213,15 +262,7 @@ function stationPoint(code) {
     name: station.name,
     lat: station.lat,
     lon: station.lon,
-    x:
-      ((station.lon - INDIA_BOUNDS.minLon) /
-        (INDIA_BOUNDS.maxLon - INDIA_BOUNDS.minLon)) *
-      els.canvas.width,
-    y:
-      (1 -
-        (station.lat - INDIA_BOUNDS.minLat) /
-          (INDIA_BOUNDS.maxLat - INDIA_BOUNDS.minLat)) *
-      els.canvas.height,
+    ...projectPoint(station.lat, station.lon),
   };
 }
 
@@ -317,6 +358,7 @@ async function selectStation(value) {
   state.autoPaIndex = 0;
   state.autoPaLastAt = 0;
   state.activeAnnouncementKey = null;
+  state.activeStationEvent = null;
   resetCrowd();
   renderDetails();
   updateHeader();
@@ -328,6 +370,7 @@ function setMode(mode) {
   state.autoPaIndex = 0;
   state.autoPaLastAt = 0;
   state.activeAnnouncementKey = null;
+  state.activeStationEvent = null;
   els.trainModeButton.classList.toggle("active", mode === "train");
   els.stationModeButton.classList.toggle("active", mode === "station");
   resetClock();
@@ -375,20 +418,36 @@ function updateHeader() {
 function renderDetails() {
   if (state.mode === "train") {
     const train = state.trains[state.selectedTrainNo];
-    els.detailTitle.textContent = "Route";
+    els.detailTitle.textContent = "Train Timetable";
     if (!train) {
       els.detailBody.textContent = "No train selected.";
       return;
     }
     const list = document.createElement("ol");
     list.className = "route-list";
-    train.route.slice(0, 18).forEach((code) => {
+    train.route.slice(0, 24).forEach((code) => {
       const station = state.stations[code];
+      const stationEvents = state.trainEvents.filter(
+        (event) => event.stationCode === code && event.type !== "Transit",
+      );
+      const arrival = stationEvents.find((event) => event.type === "Arrival");
+      const departure = stationEvents.find((event) => event.type === "Departure");
+      const times = [
+        arrival ? `Arr ${arrival.time.slice(0, 5)}` : null,
+        departure ? `Dep ${departure.time.slice(0, 5)}` : null,
+      ]
+        .filter(Boolean)
+        .join(" · ");
       const item = document.createElement("li");
+      const active = stationEvents.some(
+        (event) =>
+          Math.abs(minutesFromEvent(event) - state.currentMinutes) <= 2,
+      );
+      item.classList.toggle("active", active);
       item.innerHTML = `<span class="code">${code}</span><span>${fitLabel(
         station?.name || "Unknown station",
-      )}<br><span class="meta">${
-        station?.lat == null ? "No coordinates yet" : "Mapped"
+      )}<br><span class="meta">${times || "No scheduled stop time"}${
+        station?.lat == null ? " · No coordinates" : ""
       }</span></span>`;
       list.append(item);
     });
@@ -562,7 +621,53 @@ function paEligibleAnnouncementEvents(limit = 8) {
 
 function setActiveAnnouncement(event, scope) {
   state.activeAnnouncementKey = event ? announcementKey(event, scope) : null;
+  state.activeStationEvent = event || null;
   renderDetails();
+}
+
+function nearestStationEvent() {
+  const events =
+    state.mode === "station" && state.stationEvents.length > 0
+      ? state.stationEvents
+      : state.trainEvents;
+  const candidates = events.filter(
+    (event) => event.type === "Arrival" || event.type === "Departure",
+  );
+  if (state.activeStationEvent) {
+    return state.activeStationEvent;
+  }
+  return candidates.reduce((nearest, event) => {
+    if (!nearest) {
+      return event;
+    }
+    const eventDelta = Math.abs(minutesFromEvent(event) - state.currentMinutes);
+    const nearestDelta = Math.abs(minutesFromEvent(nearest) - state.currentMinutes);
+    return eventDelta < nearestDelta ? event : nearest;
+  }, null);
+}
+
+function stationTrainAnimation(event) {
+  if (!event) {
+    return null;
+  }
+  const eventMinute = minutesFromEvent(event);
+  const delta = state.currentMinutes - eventMinute;
+  if (event.type === "Arrival") {
+    if (delta < -6 || delta > 12) {
+      return null;
+    }
+    if (delta < 0) {
+      return { event, phase: "arriving", progress: Math.max(0, Math.min(1, (delta + 6) / 6)) };
+    }
+    return { event, phase: "dwell", progress: Math.max(0, Math.min(1, delta / 12)) };
+  }
+  if (delta < -10 || delta > 6) {
+    return null;
+  }
+  if (delta < 0) {
+    return { event, phase: "boarding", progress: Math.max(0, Math.min(1, (delta + 10) / 10)) };
+  }
+  return { event, phase: "departing", progress: Math.max(0, Math.min(1, delta / 6)) };
 }
 
 function crossedEventWindow(event) {
@@ -730,18 +835,9 @@ function drawBackground() {
 function drawIndiaOutline() {
   ctx.save();
   ctx.beginPath();
+  const bounds = activeMapBounds();
   INDIA_OUTLINE.forEach(([lon, lat], index) => {
-    const point = {
-      x:
-        ((lon - INDIA_BOUNDS.minLon) /
-          (INDIA_BOUNDS.maxLon - INDIA_BOUNDS.minLon)) *
-        els.canvas.width,
-      y:
-        (1 -
-          (lat - INDIA_BOUNDS.minLat) /
-            (INDIA_BOUNDS.maxLat - INDIA_BOUNDS.minLat)) *
-        els.canvas.height,
-    };
+    const point = projectPoint(lat, lon, bounds);
     if (index === 0) {
       ctx.moveTo(point.x, point.y);
     } else {
@@ -791,20 +887,28 @@ function drawTrain(position) {
   }
   const pulse = Math.sin(performance.now() / 160) * 2;
   ctx.save();
+  ctx.strokeStyle = "rgba(230, 193, 93, 0.35)";
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(position.x, position.y, 34 + pulse * 2, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+
+  ctx.save();
   ctx.translate(position.x, position.y);
   ctx.fillStyle = "#d8654f";
   ctx.strokeStyle = "#f6f1e8";
   ctx.lineWidth = 2;
   ctx.beginPath();
-  ctx.roundRect(-23, -12 + pulse, 46, 24, 7);
+  ctx.roundRect(-30, -15 + pulse, 60, 30, 8);
   ctx.fill();
   ctx.stroke();
   ctx.fillStyle = "#221f1b";
-  ctx.fillRect(-13, -5 + pulse, 9, 8);
-  ctx.fillRect(4, -5 + pulse, 9, 8);
+  ctx.fillRect(-18, -7 + pulse, 11, 10);
+  ctx.fillRect(1, -7 + pulse, 11, 10);
   ctx.fillStyle = "#e6c15d";
   ctx.beginPath();
-  ctx.arc(19, 7 + pulse, 4, 0, Math.PI * 2);
+  ctx.arc(24, 9 + pulse, 5, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
 
@@ -824,6 +928,7 @@ function drawStationScene(deltaSeconds, stationCode = state.selectedStationCode)
     x: els.canvas.width * 0.5,
     y: els.canvas.height * 0.48,
   };
+  const trainAnimation = stationTrainAnimation(nearestStationEvent());
   ctx.save();
   ctx.translate(station.x, station.y);
   ctx.fillStyle = "#2a2722";
@@ -831,10 +936,18 @@ function drawStationScene(deltaSeconds, stationCode = state.selectedStationCode)
   ctx.fillStyle = "#333126";
   ctx.fillRect(-260, -26, 520, 26);
   ctx.fillStyle = "#e6c15d";
-  ctx.fillRect(-220, -54, 170, 35);
+  ctx.fillRect(-242, -58, 230, 39);
   ctx.fillStyle = "#18120a";
-  ctx.font = "700 20px system-ui";
-  ctx.fillText(stationCode || "STN", -204, -30);
+  ctx.font = "700 17px system-ui";
+  ctx.fillText(stationCode || "STN", -230, -34);
+  if (trainAnimation) {
+    ctx.font = "600 12px system-ui";
+    ctx.fillText(
+      `PF ${platformForEvent(trainAnimation.event)} · ${trainAnimation.event.type} ${trainAnimation.event.trainNo}`,
+      -124,
+      -34,
+    );
+  }
 
   ctx.strokeStyle = "#d7d0c4";
   ctx.lineWidth = 4;
@@ -844,6 +957,7 @@ function drawStationScene(deltaSeconds, stationCode = state.selectedStationCode)
     ctx.lineTo(300, y);
     ctx.stroke();
   }
+  drawPlatformTrain(trainAnimation);
   ctx.restore();
 
   state.vendors.forEach((vendor) => {
@@ -864,6 +978,64 @@ function drawStationScene(deltaSeconds, stationCode = state.selectedStationCode)
     ctx.fill();
     ctx.fillRect(person.x - 4, person.y - 9, 8, 18);
   });
+}
+
+function drawPlatformTrain(animation) {
+  if (!animation) {
+    return;
+  }
+  const { event, phase, progress } = animation;
+  const easing = progress * progress * (3 - 2 * progress);
+  let x = -30;
+  if (phase === "arriving") {
+    x = -420 + easing * 390;
+  } else if (phase === "departing") {
+    x = -30 + easing * 430;
+  }
+  const y = 92;
+  const carCount = 4;
+  const carWidth = 72;
+  const carHeight = 30;
+
+  ctx.save();
+  ctx.translate(x, y);
+  for (let index = 0; index < carCount; index += 1) {
+    const carX = index * (carWidth + 6);
+    ctx.fillStyle = index === 0 ? "#b94335" : "#c35642";
+    ctx.beginPath();
+    ctx.roundRect(carX, -carHeight, carWidth, carHeight, 6);
+    ctx.fill();
+    ctx.strokeStyle = "#f6f1e8";
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    ctx.fillStyle = "#221f1b";
+    for (let windowIndex = 0; windowIndex < 3; windowIndex += 1) {
+      ctx.fillRect(carX + 12 + windowIndex * 17, -23, 10, 9);
+    }
+
+    ctx.fillStyle = "#171412";
+    ctx.beginPath();
+    ctx.arc(carX + 15, 1, 5, 0, Math.PI * 2);
+    ctx.arc(carX + carWidth - 15, 1, 5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.fillStyle = "#e6c15d";
+  ctx.font = "700 13px system-ui";
+  ctx.fillText(`${event.trainNo}`, 14, -40);
+  ctx.fillStyle = "#f6f1e8";
+  ctx.font = "600 12px system-ui";
+  ctx.fillText(
+    phase === "arriving"
+      ? "ARRIVING"
+      : phase === "departing"
+        ? "DEPARTING"
+        : "AT PLATFORM",
+    78,
+    -40,
+  );
+  ctx.restore();
 }
 
 function renderScene(deltaSeconds) {
@@ -1105,12 +1277,12 @@ function updateAudio(position) {
   const now = state.audio.audioContext.currentTime;
   const stationDominant = state.mode === "station" || position?.isStopped;
   const ducking = state.announcementBusy ? 0.18 : 1;
-  const trainVolume =
-    state.soundEnabled && !stationDominant && state.playing ? 0.5 * ducking : 0;
+  const trainVolume = 0;
   const stationVolume = 0;
   state.audio.trainGain.gain.setTargetAtTime(trainVolume, now, 0.05);
   state.audio.stationGain.gain.setTargetAtTime(stationVolume, now, 0.05);
   updateStationAmbience(stationDominant, ducking);
+  updateTrainTravelSound(!stationDominant && state.playing, ducking);
   state.soundStatus = !state.soundEnabled
     ? "silent"
     : stationDominant
@@ -1121,6 +1293,59 @@ function updateAudio(position) {
   els.soundButton.textContent = state.soundEnabled
     ? `${state.soundStatus[0].toUpperCase()}${state.soundStatus.slice(1)} Sound`
     : "Enable Sound";
+}
+
+function shuffledTrainSounds() {
+  const sounds = [...TRAIN_SOUND_POOL];
+  for (let index = sounds.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [sounds[index], sounds[swapIndex]] = [sounds[swapIndex], sounds[index]];
+  }
+  if (sounds[0] === state.currentTrainSound && sounds.length > 1) {
+    [sounds[0], sounds[1]] = [sounds[1], sounds[0]];
+  }
+  return sounds;
+}
+
+function nextTrainSound() {
+  if (state.trainSoundQueue.length === 0) {
+    state.trainSoundQueue = shuffledTrainSounds();
+  }
+  return state.trainSoundQueue.shift();
+}
+
+function loadTrainTravelSound(src) {
+  if (state.trainTravelAudio) {
+    state.trainTravelAudio.pause();
+  }
+  const audio = new Audio(src);
+  audio.loop = false;
+  audio.volume = 0;
+  audio.addEventListener("ended", () => {
+    if (state.soundEnabled && state.playing && state.mode === "train") {
+      loadTrainTravelSound(nextTrainSound());
+      state.trainTravelAudio.play().catch(() => {});
+    }
+  });
+  state.trainTravelAudio = audio;
+  state.currentTrainSound = src;
+}
+
+function updateTrainTravelSound(shouldMove, ducking) {
+  if (!state.soundEnabled || !shouldMove) {
+    if (state.trainTravelAudio && !state.trainTravelAudio.paused) {
+      state.trainTravelAudio.pause();
+    }
+    return;
+  }
+
+  if (!state.trainTravelAudio || state.trainTravelAudio.ended) {
+    loadTrainTravelSound(nextTrainSound());
+  }
+  state.trainTravelAudio.volume = 0.34 * ducking;
+  if (state.trainTravelAudio.paused) {
+    state.trainTravelAudio.play().catch(() => {});
+  }
 }
 
 function updateStationAmbience(stationDominant, ducking) {
@@ -1173,6 +1398,7 @@ function bindEvents() {
         window.speechSynthesis.cancel();
         state.announcementQueue = [];
         state.announcementBusy = false;
+        updateTrainTravelSound(false, 1);
       }
       updateAudio(currentTrainPosition());
     } catch (error) {
