@@ -34,8 +34,14 @@ def test_load_data_skips_terminal_placeholder_events(tmp_path):
 
     events = trains[107].events
     assert events[0].event_type == EventType.DEPARTURE
+    assert events[0].station_code == "SWV"
+    assert events[0].source_station_code == "SWV"
+    assert events[0].destination_station_code == "THVM"
     assert events[0].source_station == "SAWANTWADI R"
     assert events[-1].event_type == EventType.ARRIVAL
+    assert events[-1].station_code == "MAO"
+    assert events[-1].source_station_code == "THVM"
+    assert events[-1].destination_station_code == "MAO"
     assert events[-1].destination_station == "MADGOAN JN."
     assert all(event.source_station is not None for event in events)
     assert all(event.destination_station is not None for event in events)
@@ -83,7 +89,10 @@ def test_load_data_tracks_overnight_day_offsets_and_segment_distances(tmp_path):
     )
 
     assert rajula_arrival.day_offset == 1
+    assert rajula_arrival.station_code == "RLA"
     assert transit_to_rajula.distance == 141.0
+    assert transit_to_rajula.source_station_code == "BTD"
+    assert transit_to_rajula.destination_station_code == "RLA"
     assert transit_to_mahuva.distance == 54.0
     assert scheduled_datetime(
         rajula_arrival, datetime.date(2026, 5, 1)

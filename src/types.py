@@ -24,8 +24,11 @@ class Event:
     train_name: str
     time: datetime.time
     event_type: EventType
+    station_code: Optional[str] = None
     source_station: Optional[str] = None  # only for transit
+    source_station_code: Optional[str] = None
     destination_station: Optional[str] = None  # only for transit
+    destination_station_code: Optional[str] = None
     distance: Optional[float] = None  # only for transit
     day_offset: int = 0
 

@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Indian Railways Simulator</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="viewport-panel" aria-label="Railway visualization">
+        <canvas id="scene" width="1280" height="820"></canvas>
+        <div class="scene-overlay">
+          <div>
+            <p class="eyebrow" id="modeLabel">Train View</p>
+            <h1 id="primaryTitle">Loading timetable</h1>
+            <p id="primarySubtitle">Preparing stations and trains...</p>
+          </div>
+          <div class="clock-card">
+            <span id="clockLabel">--:--</span>
+            <small id="clockStatus">Paused</small>
+          </div>
+        </div>
+      </section>
+
+      <aside class="control-panel" aria-label="Controls">
+        <div class="segmented" role="tablist" aria-label="View mode">
+          <button id="trainModeButton" class="active" type="button">Train</button>
+          <button id="stationModeButton" type="button">Station</button>
+        </div>
+
+        <label class="field">
+          <span>Train</span>
+          <input id="trainSearch" list="trainOptions" placeholder="Search train no/name" />
+          <datalist id="trainOptions"></datalist>
+        </label>
+
+        <label class="field">
+          <span>Station</span>
+          <input id="stationSearch" list="stationOptions" placeholder="Search station code/name" />
+          <datalist id="stationOptions"></datalist>
+        </label>
+
+        <div class="button-row">
+          <button id="playButton" type="button">Play</button>
+          <button id="resetButton" type="button">Reset</button>
+          <button id="soundButton" type="button">Enable Sound</button>
+          <button id="testAnnouncementButton" type="button">Test PA</button>
+          <button id="autoPaButton" class="active" type="button">Auto PA On</button>
+        </div>
+
+        <label class="field">
+          <span>Station Ambience</span>
+          <input id="ambienceFile" type="file" accept="audio/*" />
+        </label>
+
+        <label class="field">
+          <span>Clock Speed</span>
+          <div class="speed-presets" aria-label="Speed presets">
+            <button class="speedPreset active" type="button" data-speed="1">1x</button>
+            <button class="speedPreset" type="button" data-speed="5">5x</button>
+            <button class="speedPreset" type="button" data-speed="10">10x</button>
+            <button class="speedPreset" type="button" data-speed="60">60x</button>
+            <button class="speedPreset" type="button" data-speed="120">120x</button>
+          </div>
+          <input id="speedSlider" type="range" min="1" max="720" value="1" step="1" />
+          <strong id="speedLabel">1x</strong>
+        </label>
+
+        <section class="timeline-panel" aria-label="Timeline controls">
+          <div class="timeline-heading">
+            <span>Timeline</span>
+            <strong id="timelineRangeLabel">--</strong>
+          </div>
+          <input id="timelineScrubber" type="range" min="0" max="1440" value="0" step="0.25" />
+          <div class="timeline-actions">
+            <button id="prevEventButton" type="button">Prev Event</button>
+            <button id="nextEventButton" type="button">Next Event</button>
+            <button id="preAnnounceButton" type="button">-15 Min</button>
+          </div>
+        </section>
+
+        <section class="details" aria-label="Current details">
+          <h2 id="detailTitle">Route</h2>
+          <div id="detailBody"></div>
+        </section>
+      </aside>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

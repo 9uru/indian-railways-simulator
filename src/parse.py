@@ -106,19 +106,30 @@ def load_data(filename: str) -> Tuple[Dict[int, Train], Dict[str, Station]]:
                 source_station = (
                     prev_row["Station Name"] if prev_row is not None else None
                 )
+                source_station_code = (
+                    prev_row["Station Code"] if prev_row is not None else None
+                )
                 destination_station = row["Station Name"]
+                destination_station_code = row["Station Code"]
             elif row["Type"] == "Departure":
                 source_station = row["Station Name"]
+                source_station_code = row["Station Code"]
                 destination_station = (
                     next_row["Station Name"] if next_row is not None else None
+                )
+                destination_station_code = (
+                    next_row["Station Code"] if next_row is not None else None
                 )
             event = Event(
                 train_no=row["Train No"],
                 train_name=row["Train Name"],
                 time=row["Time"],
                 event_type=EventType(row["Type"]),
+                station_code=row["Station Code"],
                 source_station=source_station,
+                source_station_code=source_station_code,
                 destination_station=destination_station,
+                destination_station_code=destination_station_code,
                 distance=None,
                 day_offset=day_offset,
             )
@@ -135,9 +146,14 @@ def load_data(filename: str) -> Tuple[Dict[int, Train], Dict[str, Station]]:
                     train_name=row["Train Name"],
                     time=row["Time"],
                     event_type=EventType.TRANSIT,
+                    station_code=row["Station Code"],
                     source_station=row["Station Name"],
+                    source_station_code=row["Station Code"],
                     destination_station=(
                         next_row["Station Name"] if next_row is not None else None
+                    ),
+                    destination_station_code=(
+                        next_row["Station Code"] if next_row is not None else None
                     ),
                     distance=_segment_distance(row, next_row),
                     day_offset=day_offset,
