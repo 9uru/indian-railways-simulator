@@ -6,6 +6,33 @@ const TRAIN_SOUND_POOL = [
   "./assets/train-vestibule-interior.mp3",
 ];
 const PA_LOOKAHEAD_MINUTES = 15;
+const ARRIVAL_PA_LEAD_MINUTES = 2;
+const ARRIVAL_PA_GRACE_MINUTES = 1;
+const TIMELINE_START_LEAD_MINUTES = 5;
+const FEATURED_STATION_CODES = [
+  "MAS",
+  "NDLS",
+  "HWH",
+  "CSMT",
+  "SBC",
+  "SC",
+  "ADI",
+  "PUNE",
+  "BCT",
+  "BZA",
+];
+const STATION_DISPLAY_NAMES = {
+  MAS: "Chennai Central",
+  NDLS: "New Delhi",
+  HWH: "Howrah Junction",
+  CSMT: "Mumbai CSMT",
+  SBC: "Bengaluru City",
+  SC: "Secunderabad",
+  ADI: "Ahmedabad",
+  PUNE: "Pune Junction",
+  BCT: "Mumbai Central",
+  BZA: "Vijayawada Junction",
+};
 const INDIA_BOUNDS = {
   minLat: 6.2,
   maxLat: 37.8,
@@ -76,6 +103,7 @@ const state = {
   trainTravelAudio: null,
   currentTrainSound: null,
   trainSoundQueue: [],
+  stationCamera: "overview",
   autoPaEnabled: true,
   autoPaLastAt: 0,
   autoPaIndex: 0,
@@ -91,17 +119,24 @@ const state = {
 
 const els = {
   canvas: document.querySelector("#scene"),
+  viewportPanel: document.querySelector(".viewport-panel"),
   modeLabel: document.querySelector("#modeLabel"),
   primaryTitle: document.querySelector("#primaryTitle"),
   primarySubtitle: document.querySelector("#primarySubtitle"),
   clockLabel: document.querySelector("#clockLabel"),
   clockStatus: document.querySelector("#clockStatus"),
+  momentPanel: document.querySelector("#momentPanel"),
+  momentLabel: document.querySelector("#momentLabel"),
+  momentTitle: document.querySelector("#momentTitle"),
+  momentMeta: document.querySelector("#momentMeta"),
   trainModeButton: document.querySelector("#trainModeButton"),
   stationModeButton: document.querySelector("#stationModeButton"),
   trainSearch: document.querySelector("#trainSearch"),
   trainOptions: document.querySelector("#trainOptions"),
   stationSearch: document.querySelector("#stationSearch"),
   stationOptions: document.querySelector("#stationOptions"),
+  featuredStations: document.querySelector("#featuredStations"),
+  cameraModes: Array.from(document.querySelectorAll(".cameraMode")),
   playButton: document.querySelector("#playButton"),
   resetButton: document.querySelector("#resetButton"),
   soundButton: document.querySelector("#soundButton"),
@@ -141,6 +176,26 @@ function formatMinutes(value) {
   const hours = String(Math.floor(wrapped / 60)).padStart(2, "0");
   const minutes = String(wrapped % 60).padStart(2, "0");
   return `${hours}:${minutes}`;
+}
+
+function formatDuration(minutes) {
+  const rounded = Math.max(0, Math.round(Math.abs(minutes)));
+  if (rounded < 1) {
+    return "now";
+  }
+  const hours = Math.floor(rounded / 60);
+  const remainder = rounded % 60;
+  if (hours > 0 && remainder > 0) {
+    return `${hours}h ${remainder}m`;
+  }
+  if (hours > 0) {
+    return `${hours}h`;
+  }
+  return `${remainder}m`;
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
 }
 
 function activeMapBounds() {
@@ -194,10 +249,26 @@ function timelineBounds() {
   if (eventMinutes.length === 0) {
     return { min: 0, max: 1440 };
   }
+  const initialStart = initialClockMinutes();
   return {
-    min: Math.min(...eventMinutes),
+    min: Math.min(initialStart, ...eventMinutes),
     max: Math.max(...eventMinutes),
   };
+}
+
+function initialClockMinutes() {
+  const events = activeTimelineEvents();
+  if (events.length === 0) {
+    return 0;
+  }
+  if (state.mode === "train") {
+    const firstDeparture = events.find((event) => event.type === "Departure");
+    return Math.max(
+      0,
+      minutesFromEvent(firstDeparture || events[0]) - TIMELINE_START_LEAD_MINUTES,
+    );
+  }
+  return Math.max(0, minutesFromEvent(events[0]) - TIMELINE_START_LEAD_MINUTES);
 }
 
 function setClockMinutes(value, { clearPa = true } = {}) {
@@ -259,7 +330,7 @@ function stationPoint(code) {
   }
   return {
     code,
-    name: station.name,
+    name: stationDisplayName(station),
     lat: station.lat,
     lon: station.lon,
     ...projectPoint(station.lat, station.lon),
@@ -275,6 +346,13 @@ function resizeCanvas() {
 
 function fitLabel(text, max = 28) {
   return text.length > max ? `${text.slice(0, max - 1)}...` : text;
+}
+
+function stationDisplayName(station) {
+  if (!station) {
+    return "Unknown station";
+  }
+  return STATION_DISPLAY_NAMES[station.code] || station.name;
 }
 
 async function loadInitialData() {
@@ -307,20 +385,62 @@ function populateOptions() {
   els.trainOptions.replaceChildren(trainFragment);
 
   const stationFragment = document.createDocumentFragment();
-  Object.values(state.stations)
+  const featuredStations = FEATURED_STATION_CODES.map((code) => state.stations[code])
+    .filter((station) => station?.lat != null && station?.lon != null);
+  const busyStations = Object.values(state.stations)
     .filter((station) => station.lat != null && station.lon != null)
     .sort((a, b) => b.eventCount - a.eventCount)
-    .slice(0, 1200)
+    .slice(0, 1200);
+  [...featuredStations, ...busyStations]
+    .filter(
+      (station, index, stations) =>
+        stations.findIndex((candidate) => candidate.code === station.code) === index,
+    )
     .forEach((station) => {
       const option = document.createElement("option");
-      option.value = `${station.code} - ${station.name}`;
+      option.value = `${station.code} - ${stationDisplayName(station)}`;
       stationFragment.append(option);
     });
   els.stationOptions.replaceChildren(stationFragment);
+  populateFeaturedStations(featuredStations);
+}
+
+function populateFeaturedStations(stations) {
+  const fragment = document.createDocumentFragment();
+  stations.forEach((station) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.stationCode = station.code;
+    button.textContent = stationDisplayName(station);
+    button.classList.toggle("active", station.code === state.selectedStationCode);
+    fragment.append(button);
+  });
+  els.featuredStations.replaceChildren(fragment);
 }
 
 function parseLeadingCode(value) {
   return value.split(" - ")[0].trim().toUpperCase();
+}
+
+function normalizedSearchText(value) {
+  return String(value || "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, " ")
+    .trim();
+}
+
+function resolveStationCode(value) {
+  const code = parseLeadingCode(value);
+  if (state.stations[code]) {
+    return code;
+  }
+  const query = normalizedSearchText(value);
+  const match = Object.values(state.stations).find((station) => {
+    const displayName = normalizedSearchText(stationDisplayName(station));
+    const sourceName = normalizedSearchText(station.name);
+    return displayName === query || sourceName === query;
+  });
+  return match?.code || code;
 }
 
 async function selectTrain(value) {
@@ -340,13 +460,13 @@ async function selectTrain(value) {
 }
 
 async function selectStation(value) {
-  const code = parseLeadingCode(value);
+  const code = resolveStationCode(value);
   const station = state.stations[code];
   if (!station) {
     return;
   }
   state.selectedStationCode = code;
-  els.stationSearch.value = `${station.code} - ${station.name}`;
+  els.stationSearch.value = `${station.code} - ${stationDisplayName(station)}`;
   if (station.eventsPath) {
     const response = await fetch(`${DATA_ROOT}/${station.eventsPath}`);
     const payload = await response.json();
@@ -362,10 +482,14 @@ async function selectStation(value) {
   resetCrowd();
   renderDetails();
   updateHeader();
+  els.featuredStations.querySelectorAll("button").forEach((button) => {
+    button.classList.toggle("active", button.dataset.stationCode === code);
+  });
 }
 
 function setMode(mode) {
   state.mode = mode;
+  els.viewportPanel.classList.toggle("station-layout", mode === "station");
   state.announcedEvents.clear();
   state.autoPaIndex = 0;
   state.autoPaLastAt = 0;
@@ -380,11 +504,7 @@ function setMode(mode) {
 }
 
 function resetClock() {
-  const first =
-    state.mode === "station" && state.stationEvents.length > 0
-      ? state.stationEvents[0]
-      : state.trainEvents[0];
-  state.simStartMinutes = first ? minutesFromEvent(first) : 0;
+  state.simStartMinutes = initialClockMinutes();
   state.currentMinutes = state.simStartMinutes;
   state.previousMinutes = state.currentMinutes;
   state.startedAt = performance.now();
@@ -408,11 +528,9 @@ function updateHeader() {
   const station = state.stations[state.selectedStationCode];
   els.modeLabel.textContent = "Station View";
   els.primaryTitle.textContent = station
-    ? `${station.code} ${station.name}`
+    ? `${station.code} ${stationDisplayName(station)}`
     : "Choose a station";
-  els.primarySubtitle.textContent = station
-    ? `${station.eventCount} scheduled train events. Vendors, passengers, and station ambience take focus here.`
-    : "Search for a station to begin.";
+  els.primarySubtitle.textContent = "";
 }
 
 function renderDetails() {
@@ -445,7 +563,7 @@ function renderDetails() {
       );
       item.classList.toggle("active", active);
       item.innerHTML = `<span class="code">${code}</span><span>${fitLabel(
-        station?.name || "Unknown station",
+          stationDisplayName(station),
       )}<br><span class="meta">${times || "No scheduled stop time"}${
         station?.lat == null ? " · No coordinates" : ""
       }</span></span>`;
@@ -562,34 +680,101 @@ function announcementKey(event, scope) {
   ].join(":");
 }
 
+function hasAnnouncement(event, scope) {
+  return state.announcedEvents.has(announcementKey(event, scope));
+}
+
 function announcementScope() {
   return state.mode === "station"
     ? `station:${state.selectedStationCode}`
     : `train:${state.selectedTrainNo}`;
 }
 
+function matchingArrivalForDeparture(departure, events = currentAnnouncementEvents()) {
+  if (departure.type !== "Departure") {
+    return null;
+  }
+  const departureMinute = minutesFromEvent(departure);
+  return events
+    .filter(
+      (event) =>
+        event.type === "Arrival" &&
+        event.trainNo === departure.trainNo &&
+        event.stationCode === departure.stationCode &&
+        minutesFromEvent(event) <= departureMinute,
+    )
+    .sort((a, b) => minutesFromEvent(b) - minutesFromEvent(a))[0] || null;
+}
+
+function matchingDepartureForArrival(arrival, events = currentAnnouncementEvents()) {
+  if (arrival.type !== "Arrival") {
+    return null;
+  }
+  const arrivalMinute = minutesFromEvent(arrival);
+  return events
+    .filter(
+      (event) =>
+        event.type === "Departure" &&
+        event.trainNo === arrival.trainNo &&
+        event.stationCode === arrival.stationCode &&
+        minutesFromEvent(event) >= arrivalMinute,
+    )
+    .sort((a, b) => minutesFromEvent(a) - minutesFromEvent(b))[0] || null;
+}
+
+function hasPendingArrivalBeforeDeparture(departure, scope, events = currentAnnouncementEvents()) {
+  const arrival = matchingArrivalForDeparture(departure, events);
+  if (!arrival || hasAnnouncement(arrival, scope)) {
+    return false;
+  }
+  return state.currentMinutes <= minutesFromEvent(arrival) + ARRIVAL_PA_GRACE_MINUTES;
+}
+
+function eligibleDepartureAfterArrival(arrival, scope, events = currentAnnouncementEvents()) {
+  const departure = matchingDepartureForArrival(arrival, events);
+  if (!departure || hasAnnouncement(departure, scope)) {
+    return null;
+  }
+  const delta = paTimingDelta(departure);
+  if (delta < 0 || delta > PA_LOOKAHEAD_MINUTES) {
+    return null;
+  }
+  return departure;
+}
+
+function announcementQueueItemsFor(event, scope) {
+  const items = [{ event, scope, texts: announcementTexts(event) }];
+  if (event.type === "Arrival") {
+    const departure = eligibleDepartureAfterArrival(event, scope);
+    if (departure) {
+      state.announcedEvents.add(announcementKey(departure, scope));
+      items.push({ event: departure, scope, texts: announcementTexts(departure) });
+    }
+  }
+  return items;
+}
+
 function enqueueAnnouncement(event, scope) {
   if (!state.soundEnabled || event.type === "Transit") {
-    return;
+    return false;
+  }
+  if (
+    hasAnnouncement(event, scope) ||
+    hasPendingArrivalBeforeDeparture(event, scope)
+  ) {
+    return false;
   }
   const key = announcementKey(event, scope);
-  if (state.announcedEvents.has(key)) {
-    return;
-  }
   state.announcedEvents.add(key);
-  state.announcementQueue.push({ event, scope, texts: announcementTexts(event) });
+  state.announcementQueue.push(...announcementQueueItemsFor(event, scope));
   state.announcementQueue = state.announcementQueue.slice(-4);
   processAnnouncementQueue();
+  return true;
 }
 
 function currentAnnouncementEvent() {
   const announcementEvents = paEligibleAnnouncementEvents();
-  return (
-    announcementEvents.find(
-      (event) => minutesFromEvent(event) >= state.currentMinutes,
-    ) ||
-    null
-  );
+  return announcementEvents[0] || null;
 }
 
 function currentAnnouncementEvents() {
@@ -610,12 +795,29 @@ function upcomingAnnouncementEvents(limit = 8) {
   return (upcoming.length ? upcoming : events).slice(0, limit);
 }
 
+function paTimingDelta(event) {
+  return minutesFromEvent(event) - state.currentMinutes;
+}
+
+function isPaEligibleNow(event, events = currentAnnouncementEvents(), scope = announcementScope()) {
+  const delta = paTimingDelta(event);
+  if (event.type === "Arrival") {
+    return delta <= ARRIVAL_PA_LEAD_MINUTES && delta >= -ARRIVAL_PA_GRACE_MINUTES;
+  }
+  if (event.type === "Departure") {
+    return (
+      delta >= 0 &&
+      delta <= PA_LOOKAHEAD_MINUTES &&
+      !hasPendingArrivalBeforeDeparture(event, scope, events)
+    );
+  }
+  return false;
+}
+
 function paEligibleAnnouncementEvents(limit = 8) {
   const events = currentAnnouncementEvents();
-  const upcoming = events.filter((event) => {
-    const delta = minutesFromEvent(event) - state.currentMinutes;
-    return delta >= 0 && delta <= PA_LOOKAHEAD_MINUTES;
-  });
+  const scope = announcementScope();
+  const upcoming = events.filter((event) => isPaEligibleNow(event, events, scope));
   return upcoming.slice(0, limit);
 }
 
@@ -670,6 +872,188 @@ function stationTrainAnimation(event) {
   return { event, phase: "departing", progress: Math.max(0, Math.min(1, delta / 6)) };
 }
 
+function activeStationAnimations() {
+  return currentAnnouncementEvents()
+    .map(stationTrainAnimation)
+    .filter(Boolean)
+    .sort((a, b) => minutesFromEvent(a.event) - minutesFromEvent(b.event));
+}
+
+function visibleStationPlatforms() {
+  const activePlatforms = activeStationAnimations().map((animation) =>
+    platformForEvent(animation.event),
+  );
+  const upcomingPlatforms = upcomingAnnouncementEvents(24).map(platformForEvent);
+  const allScheduledPlatforms = state.stationEvents
+    .filter((event) => event.type === "Arrival" || event.type === "Departure")
+    .map(platformForEvent);
+  const platforms = [...new Set([...activePlatforms, ...upcomingPlatforms, ...allScheduledPlatforms])]
+    .sort((a, b) => Number(a) - Number(b));
+  return platforms.length ? platforms : ["1", "2", "3"];
+}
+
+function animationForPlatform(platform) {
+  return activeStationAnimations()
+    .filter((animation) => platformForEvent(animation.event) === platform)
+    .sort((a, b) => {
+      const aDelta = Math.abs(minutesFromEvent(a.event) - state.currentMinutes);
+      const bDelta = Math.abs(minutesFromEvent(b.event) - state.currentMinutes);
+      return aDelta - bDelta;
+    })[0] || null;
+}
+
+function focusedStationPlatform(platforms = visibleStationPlatforms()) {
+  const active = state.activeStationEvent
+    ? platformForEvent(state.activeStationEvent)
+    : null;
+  if (active && platforms.includes(active)) {
+    return active;
+  }
+  const nearest = nearestStationEvent();
+  const platform = nearest ? platformForEvent(nearest) : null;
+  return platform && platforms.includes(platform) ? platform : platforms[0];
+}
+
+function displayedStationPlatforms() {
+  const platforms = visibleStationPlatforms();
+  if (state.stationCamera !== "platform" && state.stationCamera !== "train") {
+    return platforms;
+  }
+  const focus = focusedStationPlatform(platforms);
+  const focusIndex = Math.max(0, platforms.indexOf(focus));
+  const radius = state.stationCamera === "train" ? 1 : 2;
+  return platforms.slice(
+    Math.max(0, focusIndex - radius),
+    Math.min(platforms.length, focusIndex + radius + 1),
+  );
+}
+
+function stationBoardEvents(limit = 5) {
+  const events = currentAnnouncementEvents();
+  const upcoming = events.filter(
+    (event) => minutesFromEvent(event) >= state.currentMinutes - 1,
+  );
+  return (upcoming.length ? upcoming : events).slice(0, limit);
+}
+
+function trainVisualStyle(event) {
+  const name = `${event.trainName || ""} ${event.trainNo || ""}`.toUpperCase();
+  if (/RAJ|SHATABDI|DURONTO|VANDE/.test(name)) {
+    return { label: "Premium", engine: "#3b75c3", coach: "#4c8edb", accent: "#f6f1e8" };
+  }
+  if (/SF|SUPER/.test(name)) {
+    return { label: "Superfast", engine: "#b94335", coach: "#d8654f", accent: "#e6c15d" };
+  }
+  if (/PASS|MEMU|EMU|LOCAL|SUB/.test(name)) {
+    return { label: "Passenger", engine: "#3f8f78", coach: "#4db6ac", accent: "#f6f1e8" };
+  }
+  if (/EXP|MAIL/.test(name)) {
+    return { label: "Express", engine: "#a75534", coach: "#c98b5b", accent: "#e6c15d" };
+  }
+  return { label: "Service", engine: "#7c5fa6", coach: "#9274bf", accent: "#f6f1e8" };
+}
+
+function stationMoment(animation = stationTrainAnimation(nearestStationEvent())) {
+  if (!animation) {
+    const next = upcomingAnnouncementEvents(1)[0];
+    if (!next) {
+      return {
+        label: "Station Quiet",
+        title: "Waiting for the next service",
+        meta: "No upcoming platform event in this view",
+        intensity: 0.15,
+      };
+    }
+    const delta = minutesFromEvent(next) - state.currentMinutes;
+    return {
+      label: "Next Event",
+      title: `${next.type} ${next.trainNo} at ${formatMinutes(minutesFromEvent(next))}`,
+      meta: `${fitLabel(next.trainName, 36)} · Platform ${platformForEvent(next)} · ${formatDuration(delta)} away`,
+      intensity: delta <= 15 ? 0.45 : 0.2,
+    };
+  }
+
+  const { event, phase, progress } = animation;
+  const status = {
+    arriving: "Arriving",
+    dwell: "At Platform",
+    boarding: "Boarding",
+    departing: "Departing",
+  }[phase] || event.type;
+  const delta = minutesFromEvent(event) - state.currentMinutes;
+  const intensity =
+    phase === "arriving"
+      ? 0.65 + progress * 0.35
+      : phase === "departing"
+        ? 0.75 + progress * 0.25
+        : phase === "boarding"
+          ? 0.62
+          : 0.48;
+  return {
+    label: status,
+    title: `${event.trainNo} ${fitLabel(event.trainName, 30)}`,
+    meta: `Platform ${platformForEvent(event)} · ${event.type} ${formatMinutes(
+      minutesFromEvent(event),
+    )} · ${formatDuration(delta)} ${delta >= 0 ? "away" : "ago"}`,
+    intensity,
+  };
+}
+
+function stopTimingMeta(stationCode) {
+  const stationEvents = state.trainEvents.filter(
+    (event) => event.stationCode === stationCode && event.type !== "Transit",
+  );
+  const arrival = stationEvents.find((event) => event.type === "Arrival");
+  const departure = stationEvents.find((event) => event.type === "Departure");
+  return [
+    arrival ? `Arr ${formatMinutes(minutesFromEvent(arrival))}` : null,
+    departure ? `Dep ${formatMinutes(minutesFromEvent(departure))}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function trainMoment(position) {
+  if (!position) {
+    return {
+      label: "Train View",
+      title: "Waiting for train data",
+      meta: "Choose a train to begin",
+      intensity: 0.1,
+    };
+  }
+  const target = position.next || position.previous;
+  const station =
+    state.stations[target.stationCode] ||
+    state.stations[target.destinationStationCode] ||
+    state.stations[position.previous?.stationCode];
+  const delta = minutesFromEvent(target) - state.currentMinutes;
+  const label = position.isStopped
+    ? target.type === "Departure"
+      ? "At Platform"
+      : "Station Stop"
+    : target.type === "Arrival"
+      ? "Approaching"
+      : "En Route";
+  const title = station
+    ? `${target.stationCode || station.code} ${fitLabel(stationDisplayName(station), 30)}`
+    : `${target.type} ${target.stationCode || ""}`;
+  const stopTimes = stopTimingMeta(target.stationCode);
+  const meta = `${stopTimes || `${target.type} ${formatMinutes(minutesFromEvent(target))}`} · ${formatDuration(
+    delta,
+  )} ${delta >= 0 ? "away" : "ago"}`;
+  return {
+    label,
+    title,
+    meta,
+    intensity: position.isStopped ? 0.45 : Math.min(1, 0.35 + position.progress * 0.45),
+  };
+}
+
+function currentMoment(position = currentTrainPosition()) {
+  return state.mode === "train" ? trainMoment(position) : stationMoment();
+}
+
 function crossedEventWindow(event) {
   const eventMinute = minutesFromEvent(event);
   if (state.currentMinutes >= state.previousMinutes) {
@@ -718,38 +1102,82 @@ function runAutoPaLoop(now) {
   if (events.length === 0) {
     return;
   }
-  const event = events[state.autoPaIndex % events.length];
-  state.autoPaIndex += 1;
-  state.autoPaLastAt = now;
-  queueAnnouncementForEvent(event);
-}
-
-function queueAnnouncementForEvent(event) {
-  if (!event) {
+  const scope = announcementScope();
+  const pendingEvents = events.filter(
+    (event) => !hasAnnouncement(event, scope),
+  );
+  if (pendingEvents.length === 0) {
     return;
   }
-  state.announcementQueue = [
-    { event, scope: announcementScope(), texts: announcementTexts(event) },
-  ];
+  const event = pendingEvents[0];
+  state.autoPaIndex += 1;
+  if (queueAnnouncementForEvent(event, { scope })) {
+    state.autoPaLastAt = now;
+  }
+}
+
+function queueAnnouncementForEvent(event, options = {}) {
+  if (!event) {
+    return false;
+  }
+  const scope = options.scope || announcementScope();
+  if (event.type === "Transit") {
+    return false;
+  }
+  const key = announcementKey(event, scope);
+  if (
+    (!options.force && hasAnnouncement(event, scope)) ||
+    hasPendingArrivalBeforeDeparture(event, scope)
+  ) {
+    return false;
+  }
+  state.announcedEvents.add(key);
+  state.announcementQueue = announcementQueueItemsFor(event, scope);
   state.announcementBusy = false;
   processAnnouncementQueue();
+  return true;
+}
+
+function updateMomentPanel(position) {
+  const moment = currentMoment(position);
+  els.momentLabel.textContent = moment.label;
+  els.momentTitle.textContent = moment.title;
+  els.momentMeta.textContent = moment.meta;
 }
 
 function resetCrowd() {
-  const station = stationPoint(state.selectedStationCode) || {
-    x: els.canvas.width * 0.52,
-    y: els.canvas.height * 0.58,
-  };
+  const station =
+    state.mode === "station"
+      ? {
+          x: els.canvas.width * 0.5,
+          y: els.canvas.height * 0.62,
+        }
+      : stationPoint(state.selectedStationCode) || {
+          x: els.canvas.width * 0.52,
+          y: els.canvas.height * 0.58,
+        };
   state.people = Array.from({ length: 34 }, (_, index) => ({
-    x: station.x + (Math.random() - 0.5) * 280,
-    y: station.y + 44 + Math.random() * 150,
+    x:
+      state.mode === "station"
+        ? 80 + Math.random() * Math.max(120, els.canvas.width - 160)
+        : station.x + (Math.random() - 0.5) * 280,
+    y:
+      state.mode === "station"
+        ? station.y + Math.random() * Math.max(80, els.canvas.height * 0.25)
+        : station.y + 44 + Math.random() * 150,
     speed: 14 + Math.random() * 42,
     direction: Math.random() > 0.5 ? 1 : -1,
     color: ["#e85d75", "#4db6ac", "#f2c14e", "#6fa8dc", "#f7a072"][index % 5],
   }));
   state.vendors = Array.from({ length: 5 }, (_, index) => ({
-    x: station.x - 170 + index * 84,
-    y: station.y + 96 + Math.random() * 34,
+    x:
+      state.mode === "station"
+        ? 110 + index * Math.max(72, (els.canvas.width - 220) / 4)
+        : station.x - 170 + index * 84,
+    y:
+      state.mode === "station"
+        ? station.y + 46 + Math.random() * 36
+        : station.y + 96 + Math.random() * 34,
     color: ["#d8654f", "#e6c15d", "#4db6ac", "#c98b5b", "#8ab17d"][index],
   }));
 }
@@ -878,6 +1306,52 @@ function drawRoute(routePoints) {
     ctx.arc(point.x, point.y, index === 0 ? 7 : 4.5, 0, Math.PI * 2);
     ctx.fill();
   });
+
+  routePoints.forEach((point, index) => {
+    const labelStride = routePoints.length > 36 ? Math.ceil(routePoints.length / 24) : 1;
+    const shouldLabel =
+      index === 0 ||
+      index === routePoints.length - 1 ||
+      index % labelStride === 0;
+    if (shouldLabel) {
+      drawStationLabel(point, {
+        offsetX: index % 2 === 0 ? 10 : -10,
+        offsetY: index % 2 === 0 ? -12 : 18,
+        align: index % 2 === 0 ? "left" : "right",
+      });
+    }
+  });
+  ctx.restore();
+}
+
+function drawStationLabel(point, options = {}) {
+  if (!point?.name) {
+    return;
+  }
+  const {
+    offsetX = 12,
+    offsetY = -12,
+    align = "left",
+    maxChars = 20,
+  } = options;
+  const label = fitLabel(point.name, maxChars);
+  ctx.save();
+  ctx.font = "700 12px system-ui";
+  ctx.textBaseline = "middle";
+  ctx.textAlign = align;
+  const paddingX = 7;
+  const paddingY = 4;
+  const textWidth = ctx.measureText(label).width;
+  const x = point.x + offsetX;
+  const y = point.y + offsetY;
+  const boxX = align === "right" ? x - textWidth - paddingX * 2 : x;
+  const boxY = y - 8 - paddingY;
+  ctx.fillStyle = "rgba(24, 20, 16, 0.82)";
+  ctx.beginPath();
+  ctx.roundRect(boxX, boxY, textWidth + paddingX * 2, 16 + paddingY * 2, 5);
+  ctx.fill();
+  ctx.fillStyle = "#f6f1e8";
+  ctx.fillText(label, align === "right" ? x - paddingX : x + paddingX, y);
   ctx.restore();
 }
 
@@ -929,6 +1403,7 @@ function drawStationScene(deltaSeconds, stationCode = state.selectedStationCode)
     y: els.canvas.height * 0.48,
   };
   const trainAnimation = stationTrainAnimation(nearestStationEvent());
+  const moment = stationMoment(trainAnimation);
   ctx.save();
   ctx.translate(station.x, station.y);
   ctx.fillStyle = "#2a2722";
@@ -949,6 +1424,17 @@ function drawStationScene(deltaSeconds, stationCode = state.selectedStationCode)
     );
   }
 
+  ctx.fillStyle = "rgba(24, 18, 10, 0.88)";
+  ctx.beginPath();
+  ctx.roundRect(36, -62, 214, 45, 6);
+  ctx.fill();
+  ctx.fillStyle = "#e6c15d";
+  ctx.font = "800 12px system-ui";
+  ctx.fillText(moment.label.toUpperCase(), 48, -44);
+  ctx.fillStyle = "#f6f1e8";
+  ctx.font = "600 11px system-ui";
+  ctx.fillText(fitLabel(moment.title, 24), 48, -27);
+
   ctx.strokeStyle = "#d7d0c4";
   ctx.lineWidth = 4;
   for (let y = 102; y <= 136; y += 28) {
@@ -967,16 +1453,18 @@ function drawStationScene(deltaSeconds, stationCode = state.selectedStationCode)
     ctx.fillRect(vendor.x - 24, vendor.y - 24, 48, 8);
   });
 
-  state.people.forEach((person) => {
-    person.x += person.direction * person.speed * deltaSeconds;
+  const activity = 0.7 + moment.intensity * 1.8;
+  state.people.forEach((person, index) => {
+    const platformPull = moment.intensity > 0.55 ? Math.sin(performance.now() / 600 + index) * 5 : 0;
+    person.x += person.direction * person.speed * activity * deltaSeconds;
     if (person.x < station.x - 280 || person.x > station.x + 280) {
       person.direction *= -1;
     }
     ctx.fillStyle = person.color;
     ctx.beginPath();
-    ctx.arc(person.x, person.y - 14, 5, 0, Math.PI * 2);
+    ctx.arc(person.x, person.y - 14 + platformPull * 0.08, 5, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillRect(person.x - 4, person.y - 9, 8, 18);
+    ctx.fillRect(person.x - 4, person.y - 9 + platformPull * 0.08, 8, 18);
   });
 }
 
@@ -1038,11 +1526,275 @@ function drawPlatformTrain(animation) {
   ctx.restore();
 }
 
+function drawFullStationScene(deltaSeconds) {
+  const width = els.canvas.width;
+  const height = els.canvas.height;
+  const sidePanelWidth = width > 980 ? 330 : 0;
+  const platformWidth = width - sidePanelWidth;
+  const platforms = displayedStationPlatforms();
+  const station = state.stations[state.selectedStationCode];
+  const moment = stationMoment();
+  const top = Math.max(112, height * 0.14);
+  const firstY = top + (state.stationCamera === "train" ? 46 : 32);
+  const floorReserve = state.stationCamera === "crowd"
+    ? Math.max(130, height * 0.18)
+    : Math.max(52, height * 0.08);
+  const platformSpan = Math.max(1, platforms.length - 1);
+  const maxGap = state.stationCamera === "platform" || state.stationCamera === "train" ? 132 : 92;
+  const platformGap = clamp((height - firstY - floorReserve) / platformSpan, 34, maxGap);
+
+  ctx.save();
+  const wallGradient = ctx.createLinearGradient(0, 0, 0, height);
+  wallGradient.addColorStop(0, "#26231f");
+  wallGradient.addColorStop(0.48, "#1d1a17");
+  wallGradient.addColorStop(1, "#312b24");
+  ctx.fillStyle = wallGradient;
+  ctx.fillRect(0, 0, width, height);
+
+  ctx.fillStyle = "#171412";
+  ctx.fillRect(0, 0, width, top - 18);
+  ctx.strokeStyle = "rgba(230, 193, 93, 0.34)";
+  ctx.lineWidth = 2;
+  for (let x = 0; x < width; x += 88) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x + 34, top - 18);
+    ctx.stroke();
+  }
+
+  drawDestinationBoard(28, 78, Math.min(620, platformWidth - 56), 72);
+
+  platforms.forEach((platform, index) => {
+    const y = firstY + index * platformGap;
+    const animation = animationForPlatform(platform);
+    drawFullPlatform(platform, y, animation, platformGap, platformWidth);
+  });
+
+  drawFullStationCrowd(deltaSeconds, moment, firstY + platforms.length * platformGap);
+  if (state.stationCamera === "train") {
+    drawTrainCloseUp(platformWidth, height);
+  }
+  ctx.restore();
+}
+
+function drawDestinationBoard(x, y, width, height) {
+  if (width < 300) {
+    return;
+  }
+  const rows = stationBoardEvents(state.stationCamera === "platform" ? 4 : 5);
+  const blink = Math.floor(performance.now() / 450) % 2 === 0;
+  ctx.save();
+  ctx.fillStyle = "rgba(8, 10, 9, 0.88)";
+  ctx.beginPath();
+  ctx.roundRect(x, y, width, height, 8);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(230, 193, 93, 0.34)";
+  ctx.stroke();
+  ctx.fillStyle = "#e6c15d";
+  ctx.font = "900 12px system-ui";
+  ctx.fillText("NEXT TRAINS", x + 14, y + 21);
+  rows.forEach((event, index) => {
+    const rowY = y + 40 + index * 18;
+    const active = announcementKey(event, announcementScope()) === state.activeAnnouncementKey;
+    ctx.fillStyle = active && blink ? "#f6f1e8" : active ? "#e6c15d" : "#4db6ac";
+    ctx.font = active ? "900 12px ui-monospace, monospace" : "700 12px ui-monospace, monospace";
+    ctx.fillText(
+      `${event.type.slice(0, 3).toUpperCase()} ${formatMinutes(minutesFromEvent(event))} PF${platformForEvent(event)} ${event.trainNo} ${fitLabel(event.trainName, 22)}`,
+      x + 14,
+      rowY,
+    );
+  });
+  ctx.restore();
+}
+
+function drawFullPlatform(platform, y, animation, platformGap = 72, width = els.canvas.width) {
+  const compact = platformGap < 52;
+  const signY = y - (compact ? 45 : 65);
+  const signHeight = compact ? 28 : 38;
+  const active = animation && announcementKey(animation.event, announcementScope()) === state.activeAnnouncementKey;
+  ctx.save();
+  if (active) {
+    const glow = 0.35 + Math.sin(performance.now() / 160) * 0.12;
+    ctx.fillStyle = `rgba(230, 193, 93, ${glow})`;
+    ctx.fillRect(0, y - (compact ? 30 : 40), width, compact ? 68 : 86);
+  }
+  ctx.fillStyle = indexStripeColor(platform);
+  ctx.fillRect(0, y - (compact ? 24 : 32), width, compact ? 20 : 26);
+  ctx.fillStyle = "#403a30";
+  ctx.fillRect(0, y - 6, width, compact ? 26 : 34);
+  ctx.strokeStyle = "#d7d0c4";
+  ctx.lineWidth = compact ? 3 : 4;
+  ctx.beginPath();
+  ctx.moveTo(0, y + (compact ? 14 : 20));
+  ctx.lineTo(width, y + (compact ? 14 : 20));
+  ctx.stroke();
+  ctx.strokeStyle = "rgba(246, 241, 232, 0.28)";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(0, y + (compact ? 28 : 40));
+  ctx.lineTo(width, y + (compact ? 28 : 40));
+  ctx.stroke();
+
+  ctx.fillStyle = "#e6c15d";
+  ctx.beginPath();
+  ctx.roundRect(28, signY, compact ? 86 : 106, signHeight, 6);
+  ctx.fill();
+  ctx.fillStyle = "#18120a";
+  ctx.font = compact ? "900 12px system-ui" : "900 14px system-ui";
+  ctx.fillText(`PF ${platform}`, 44, signY + (compact ? 19 : 24));
+
+  if (animation) {
+    drawFullPlatformTrain(animation, y + (compact ? 14 : 20), compact, width);
+    ctx.fillStyle = "rgba(24, 18, 10, 0.88)";
+    ctx.beginPath();
+    ctx.roundRect(132, y + (compact ? 31 : 45), compact ? 250 : 310, compact ? 32 : 42, 6);
+    ctx.fill();
+    ctx.fillStyle = "#e6c15d";
+    ctx.font = compact ? "800 10px system-ui" : "800 11px system-ui";
+    ctx.fillText(animation.phase.toUpperCase(), 146, y + (compact ? 44 : 62));
+    ctx.fillStyle = "#f6f1e8";
+    ctx.font = compact ? "700 11px system-ui" : "700 13px system-ui";
+    ctx.fillText(
+      `${animation.event.trainNo} ${fitLabel(animation.event.trainName, compact ? 19 : 26)}`,
+      146,
+      y + (compact ? 58 : 78),
+    );
+    const style = trainVisualStyle(animation.event);
+    ctx.fillStyle = style.accent;
+    ctx.font = "800 10px system-ui";
+    ctx.fillText(style.label.toUpperCase(), compact ? 330 : 390, y + (compact ? 44 : 62));
+  }
+  ctx.restore();
+}
+
+function indexStripeColor(platform) {
+  return Number(platform) % 2 === 0 ? "#27231d" : "#2f2a22";
+}
+
+function drawFullPlatformTrain(animation, trackY, compact = false, width = els.canvas.width) {
+  const { event, phase, progress } = animation;
+  const style = trainVisualStyle(event);
+  const easing = progress * progress * (3 - 2 * progress);
+  const carCount = Math.max(4, Math.min(7, Math.floor(width / 170)));
+  const carWidth = compact
+    ? Math.min(98, Math.max(70, width / (carCount + 5)))
+    : Math.min(118, Math.max(82, width / (carCount + 4)));
+  const carHeight = compact ? 25 : 34;
+  const trainWidth = carCount * (carWidth + 8);
+  let x = width * 0.24;
+  if (phase === "arriving") {
+    x = -trainWidth + easing * (width * 0.24 + trainWidth);
+  } else if (phase === "departing") {
+    x = width * 0.24 + easing * (width + 80);
+  }
+
+  ctx.save();
+  ctx.translate(x, trackY);
+  for (let index = 0; index < carCount; index += 1) {
+    const carX = index * (carWidth + 8);
+    ctx.fillStyle = index === 0 ? style.engine : style.coach;
+    ctx.beginPath();
+    ctx.roundRect(carX, -carHeight, carWidth, carHeight, 6);
+    ctx.fill();
+    ctx.strokeStyle = "#f6f1e8";
+    ctx.lineWidth = 1.4;
+    ctx.stroke();
+    ctx.fillStyle = "#221f1b";
+    for (let windowIndex = 0; windowIndex < 4; windowIndex += 1) {
+      ctx.fillRect(
+        carX + 13 + windowIndex * (carWidth / 5),
+        compact ? -19 : -25,
+        compact ? 10 : 12,
+        compact ? 7 : 10,
+      );
+    }
+  }
+  ctx.fillStyle = style.accent;
+  ctx.font = compact ? "800 11px system-ui" : "800 13px system-ui";
+  ctx.fillText(event.trainNo, 16, compact ? -32 : -44);
+  ctx.restore();
+}
+
+function drawTrainCloseUp(width, height) {
+  const animation = activeStationAnimations()[0];
+  if (!animation) {
+    return;
+  }
+  const style = trainVisualStyle(animation.event);
+  const panelWidth = Math.min(620, width - 56);
+  const panelHeight = 116;
+  const x = 28;
+  const y = height - panelHeight - 24;
+  ctx.save();
+  ctx.fillStyle = "rgba(8, 10, 9, 0.86)";
+  ctx.beginPath();
+  ctx.roundRect(x, y, panelWidth, panelHeight, 8);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(230, 193, 93, 0.35)";
+  ctx.stroke();
+  ctx.fillStyle = "#e6c15d";
+  ctx.font = "900 13px system-ui";
+  ctx.fillText(`${animation.phase.toUpperCase()} · PF ${platformForEvent(animation.event)} · ${style.label.toUpperCase()}`, x + 18, y + 28);
+  ctx.fillStyle = "#f6f1e8";
+  ctx.font = "900 24px system-ui";
+  ctx.fillText(`${animation.event.trainNo} ${fitLabel(animation.event.trainName, 26)}`, x + 18, y + 60);
+  ctx.translate(x + 22, y + 96);
+  for (let index = 0; index < 5; index += 1) {
+    const carX = index * 96;
+    ctx.fillStyle = index === 0 ? style.engine : style.coach;
+    ctx.beginPath();
+    ctx.roundRect(carX, -28, 86, 28, 6);
+    ctx.fill();
+    ctx.fillStyle = "#171412";
+    for (let windowIndex = 0; windowIndex < 3; windowIndex += 1) {
+      ctx.fillRect(carX + 14 + windowIndex * 20, -21, 12, 8);
+    }
+  }
+  ctx.restore();
+}
+
+function drawFullStationCrowd(deltaSeconds, moment, floorStart) {
+  const width = els.canvas.width;
+  const height = els.canvas.height;
+  const activity = (state.stationCamera === "crowd" ? 1.35 : 0.8) + moment.intensity * 2;
+  const focusedPlatform = focusedStationPlatform();
+  const platforms = displayedStationPlatforms();
+  const focusIndex = Math.max(0, platforms.indexOf(focusedPlatform));
+  const focusY = floorStart - 44 - Math.max(0, platforms.length - focusIndex - 1) * 8;
+  state.vendors.forEach((vendor) => {
+    ctx.fillStyle = vendor.color;
+    ctx.fillRect(vendor.x - 22, vendor.y - 18, 44, 24);
+    ctx.fillStyle = "#f6f1e8";
+    ctx.fillRect(vendor.x - 28, vendor.y - 26, 56, 8);
+  });
+  state.people.forEach((person, index) => {
+    if (moment.intensity > 0.45 || state.stationCamera === "crowd") {
+      const targetX = width * (0.18 + (index % 7) * 0.095);
+      const targetY = clamp(focusY + ((index % 5) - 2) * 14, 120, height - 30);
+      person.x += (targetX - person.x) * deltaSeconds * 0.18 * activity;
+      person.y += (targetY - person.y) * deltaSeconds * 0.12 * activity;
+    }
+    person.x += person.direction * person.speed * activity * deltaSeconds;
+    if (person.x < 36 || person.x > width - 36) {
+      person.direction *= -1;
+    }
+    if (person.y < floorStart - 36 || person.y > height - 28) {
+      person.y = floorStart + Math.random() * Math.max(40, height - floorStart - 48);
+    }
+    const bounce = Math.sin(performance.now() / 140 + index) * moment.intensity * (state.stationCamera === "crowd" ? 2 : 1);
+    ctx.fillStyle = person.color;
+    ctx.beginPath();
+    ctx.arc(person.x, person.y - 14 + bounce, state.stationCamera === "crowd" ? 6 : 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillRect(person.x - 4, person.y - 9 + bounce, state.stationCamera === "crowd" ? 9 : 8, state.stationCamera === "crowd" ? 20 : 18);
+  });
+}
+
 function renderScene(deltaSeconds) {
   drawBackground();
-  drawIndiaOutline();
 
   if (state.mode === "train") {
+    drawIndiaOutline();
     const position = currentTrainPosition();
     drawRoute(position?.routePoints);
     drawTrain(position);
@@ -1053,16 +1805,7 @@ function renderScene(deltaSeconds) {
       );
     }
   } else {
-    const station = stationPoint(state.selectedStationCode);
-    drawStationScene(deltaSeconds);
-    if (station) {
-      ctx.save();
-      ctx.fillStyle = "#4db6ac";
-      ctx.beginPath();
-      ctx.arc(station.x, station.y, 9, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
-    }
+    drawFullStationScene(deltaSeconds);
   }
 }
 
@@ -1079,6 +1822,7 @@ function tick(now) {
   els.clockLabel.textContent = formatClock(state.currentMinutes);
   els.clockStatus.textContent = state.playing ? `${state.speed}x` : "Paused";
   syncTimelineControls();
+  updateMomentPanel(position);
   updateAudio(position);
   triggerStationAnnouncements(position);
   runAutoPaLoop(now);
@@ -1275,14 +2019,24 @@ function updateAudio(position) {
     return;
   }
   const now = state.audio.audioContext.currentTime;
+  const animation = stationTrainAnimation(nearestStationEvent());
+  const moment = currentMoment(position);
   const stationDominant = state.mode === "station" || position?.isStopped;
   const ducking = state.announcementBusy ? 0.18 : 1;
+  const stationTrainMoving =
+    state.mode === "station" &&
+    animation &&
+    (animation.phase === "arriving" || animation.phase === "departing");
   const trainVolume = 0;
   const stationVolume = 0;
   state.audio.trainGain.gain.setTargetAtTime(trainVolume, now, 0.05);
   state.audio.stationGain.gain.setTargetAtTime(stationVolume, now, 0.05);
-  updateStationAmbience(stationDominant, ducking);
-  updateTrainTravelSound(!stationDominant && state.playing, ducking);
+  updateStationAmbience(stationDominant, ducking, moment.intensity);
+  updateTrainTravelSound(
+    (!stationDominant && state.playing) || (stationTrainMoving && state.playing),
+    ducking,
+    stationTrainMoving ? 0.22 * moment.intensity : 0.34 + moment.intensity * 0.06,
+  );
   state.soundStatus = !state.soundEnabled
     ? "silent"
     : stationDominant
@@ -1331,7 +2085,7 @@ function loadTrainTravelSound(src) {
   state.currentTrainSound = src;
 }
 
-function updateTrainTravelSound(shouldMove, ducking) {
+function updateTrainTravelSound(shouldMove, ducking, level = 0.34) {
   if (!state.soundEnabled || !shouldMove) {
     if (state.trainTravelAudio && !state.trainTravelAudio.paused) {
       state.trainTravelAudio.pause();
@@ -1342,19 +2096,19 @@ function updateTrainTravelSound(shouldMove, ducking) {
   if (!state.trainTravelAudio || state.trainTravelAudio.ended) {
     loadTrainTravelSound(nextTrainSound());
   }
-  state.trainTravelAudio.volume = 0.34 * ducking;
+  state.trainTravelAudio.volume = Math.max(0, Math.min(0.46, level * ducking));
   if (state.trainTravelAudio.paused) {
     state.trainTravelAudio.play().catch(() => {});
   }
 }
 
-function updateStationAmbience(stationDominant, ducking) {
+function updateStationAmbience(stationDominant, ducking, intensity = 0.2) {
   const ambience = state.stationAmbienceAudio;
   if (!ambience) {
     return;
   }
   const shouldPlay = state.soundEnabled && stationDominant && state.playing;
-  ambience.volume = shouldPlay ? 0.22 * ducking : 0;
+  ambience.volume = shouldPlay ? (0.16 + intensity * 0.12) * ducking : 0;
   if (shouldPlay && ambience.paused) {
     ambience.play().catch(() => {});
   } else if (!shouldPlay && !ambience.paused) {
@@ -1375,6 +2129,23 @@ function bindEvents() {
   els.trainSearch.addEventListener("change", () => selectTrain(els.trainSearch.value));
   els.stationSearch.addEventListener("change", () => {
     selectStation(els.stationSearch.value);
+  });
+  els.featuredStations.addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-station-code]");
+    if (!button) {
+      return;
+    }
+    setMode("station");
+    selectStation(button.dataset.stationCode);
+  });
+  els.cameraModes.forEach((button) => {
+    button.addEventListener("click", () => {
+      state.stationCamera = button.dataset.camera;
+      els.cameraModes.forEach((candidate) => {
+        candidate.classList.toggle("active", candidate === button);
+      });
+      resetCrowd();
+    });
   });
   els.playButton.addEventListener("click", () => {
     state.playing = !state.playing;
@@ -1431,7 +2202,7 @@ function bindEvents() {
       }
       await state.audio.audioContext.resume();
       state.soundEnabled = true;
-      queueAnnouncementForEvent(currentAnnouncementEvent());
+      queueAnnouncementForEvent(currentAnnouncementEvent(), { force: true });
       updateAudio(currentTrainPosition());
     } catch (error) {
       console.error(error);

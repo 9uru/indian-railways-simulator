@@ -21,6 +21,11 @@
             <small id="clockStatus">Paused</small>
           </div>
         </div>
+        <div class="moment-panel" id="momentPanel" aria-live="polite">
+          <span id="momentLabel">Ready</span>
+          <strong id="momentTitle">Waiting for timetable</strong>
+          <small id="momentMeta">Choose a train or station to begin</small>
+        </div>
       </section>
 
       <aside class="control-panel" aria-label="Controls">
@@ -40,6 +45,21 @@
           <input id="stationSearch" list="stationOptions" placeholder="Search station code/name" />
           <datalist id="stationOptions"></datalist>
         </label>
+
+        <section class="quick-stations" aria-label="Featured stations">
+          <span>Featured Stations</span>
+          <div id="featuredStations" class="quick-station-grid"></div>
+        </section>
+
+        <section class="camera-panel" aria-label="Station camera">
+          <span>Station Camera</span>
+          <div class="camera-modes">
+            <button class="cameraMode active" type="button" data-camera="overview">Overview</button>
+            <button class="cameraMode" type="button" data-camera="platform">Platform</button>
+            <button class="cameraMode" type="button" data-camera="train">Train</button>
+            <button class="cameraMode" type="button" data-camera="crowd">Crowd</button>
+          </div>
+        </section>
 
         <div class="button-row">
           <button id="playButton" type="button">Play</button>
