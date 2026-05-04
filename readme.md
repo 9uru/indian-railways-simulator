@@ -33,6 +33,7 @@ Then visit http://127.0.0.1:8000/web/.
 
 - Timetable data: @itzmeanjan.
 - Station coordinates: Sankalp Sharma's "Geo-referenced Indian Railways Data" gist, documented in `data/external/README.md`.
+- Train name enrichment: jraavis's "Indian Railway Train Numbers & Names.json" gist, documented in `data/external/README.md`. Source timetable names are preserved as fallbacks in generated data.
 - Station announcement reference: [R-o-n-a-k/Railway](https://github.com/R-o-n-a-k/Railway), used as inspiration for fragment-based railway PA announcements.
 - Bilingual PA reference: [Cosmos-Ved09/RailVaani-Murf-ai](https://github.com/Cosmos-Ved09/RailVaani-Murf-ai), used as inspiration for English/Hindi-style announcement structure.
 - Station ambience: `arunangshubanerjee-indian-railway-station-ambience-crowd-chatter-and-train-arrival-331012.mp3`, provided locally by the project owner and stored as `web/assets/station-ambience.mp3`.

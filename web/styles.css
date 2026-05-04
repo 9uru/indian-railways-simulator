@@ -230,13 +230,15 @@ h1 {
 }
 
 .quick-stations,
-.camera-panel {
+.camera-panel,
+.pa-language-panel {
   display: grid;
   gap: 8px;
 }
 
 .quick-stations > span,
-.camera-panel > span {
+.camera-panel > span,
+.pa-language-panel > span {
   color: var(--muted);
   font-size: 12px;
   font-weight: 800;
@@ -250,14 +252,16 @@ h1 {
   gap: 8px;
 }
 
-.camera-modes {
+.camera-modes,
+.pa-language-toggles {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
 }
 
 .quick-station-grid button,
-.camera-modes button {
+.camera-modes button,
+.pa-language-toggles button {
   min-height: 34px;
   padding: 0 8px;
   overflow: hidden;
@@ -267,7 +271,8 @@ h1 {
 }
 
 .quick-station-grid button.active,
-.camera-modes button.active {
+.camera-modes button.active,
+.pa-language-toggles button.active {
   border-color: var(--rail);
   background: #3a3324;
   color: var(--rail);

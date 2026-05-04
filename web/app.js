@@ -104,6 +104,10 @@ const state = {
   currentTrainSound: null,
   trainSoundQueue: [],
   stationCamera: "overview",
+  paLanguages: {
+    english: true,
+    hindi: false,
+  },
   autoPaEnabled: true,
   autoPaLastAt: 0,
   autoPaIndex: 0,
@@ -142,6 +146,8 @@ const els = {
   soundButton: document.querySelector("#soundButton"),
   testAnnouncementButton: document.querySelector("#testAnnouncementButton"),
   autoPaButton: document.querySelector("#autoPaButton"),
+  englishPaButton: document.querySelector("#englishPaButton"),
+  hindiPaButton: document.querySelector("#hindiPaButton"),
   ambienceFile: document.querySelector("#ambienceFile"),
   speedSlider: document.querySelector("#speedSlider"),
   speedLabel: document.querySelector("#speedLabel"),
@@ -631,20 +637,52 @@ function spokenTime(event) {
   return `${hour}:${String(minute).padStart(2, "0")} ${ampm}`;
 }
 
+function routeTerminalName(event, key, fallback) {
+  return event[key] || fallback || "its terminal station";
+}
+
+function majorRoutePhrase(event) {
+  const majors = event.majorRouteStations || [];
+  if (majors.length === 0) {
+    return "";
+  }
+  const currentCode = event.stationCode;
+  const destinationCode = event.routeDestinationCode;
+  const currentRouteIndex = typeof event.routeIndex === "number" ? event.routeIndex : -1;
+  const names = majors
+    .filter(
+      (station) =>
+        station.code !== currentCode &&
+        station.code !== event.routeOriginCode &&
+        station.code !== destinationCode &&
+        (typeof station.routeIndex !== "number" ||
+          currentRouteIndex < 0 ||
+          station.routeIndex > currentRouteIndex),
+    )
+    .slice(0, 2)
+    .map((station) => station.name);
+  return names.length ? ` via ${names.join(" and ")}` : "";
+}
+
 function announcementTexts(event) {
   const platform = platformForEvent(event);
   const trainNo = spokenTrainNumber(event.trainNo);
   const time = spokenTime(event);
   const train = `train number ${trainNo}, ${event.trainName}`;
   const hindiTrain = `gaadi sankhya ${trainNo}, ${event.trainName}`;
-  const origin = event.sourceStation || "its source station";
-  const destination = event.destinationStation || "its destination";
+  const origin = routeTerminalName(event, "routeOrigin", event.sourceStation);
+  const destination = routeTerminalName(
+    event,
+    "routeDestination",
+    event.destinationStation,
+  );
+  const via = majorRoutePhrase(event);
 
   if (event.type === "Arrival") {
     return {
       english: [
         "May I have your attention please.",
-        `${train}, from ${origin} to ${destination}, is arriving at platform number ${platform} at ${time}.`,
+        `${train}, from ${origin} to ${destination}${via}, is arriving at platform number ${platform} at ${time}.`,
         "Passengers are requested to stand behind the yellow line.",
       ].join(" "),
       hindi: [
@@ -658,7 +696,7 @@ function announcementTexts(event) {
   return {
     english: [
       "May I have your attention please.",
-      `${train}, from ${origin} to ${destination}, will depart from platform number ${platform} at ${time}.`,
+      `${train}, from ${origin} to ${destination}${via}, will depart from platform number ${platform} at ${time}.`,
       "Passengers are requested to board the train and mind their belongings.",
     ].join(" "),
     hindi: [
@@ -752,6 +790,17 @@ function announcementQueueItemsFor(event, scope) {
     }
   }
   return items;
+}
+
+function selectedAnnouncementLanguages() {
+  const languages = [];
+  if (state.paLanguages.english) {
+    languages.push({ key: "english", code: "en-IN" });
+  }
+  if (state.paLanguages.hindi) {
+    languages.push({ key: "hindi", code: "hi-IN" });
+  }
+  return languages.length ? languages : [{ key: "english", code: "en-IN" }];
 }
 
 function enqueueAnnouncement(event, scope) {
@@ -1143,6 +1192,19 @@ function updateMomentPanel(position) {
   els.momentLabel.textContent = moment.label;
   els.momentTitle.textContent = moment.title;
   els.momentMeta.textContent = moment.meta;
+}
+
+function updatePaLanguageButtons() {
+  els.englishPaButton.classList.toggle("active", state.paLanguages.english);
+  els.hindiPaButton.classList.toggle("active", state.paLanguages.hindi);
+}
+
+function togglePaLanguage(language) {
+  state.paLanguages[language] = !state.paLanguages[language];
+  if (!state.paLanguages.english && !state.paLanguages.hindi) {
+    state.paLanguages.english = true;
+  }
+  updatePaLanguageButtons();
 }
 
 function resetCrowd() {
@@ -2007,8 +2069,9 @@ async function processAnnouncementQueue() {
   state.announcementBusy = true;
   setActiveAnnouncement(item.event, item.scope || announcementScope());
   await playAnnouncementChime();
-  await speakAnnouncement(item.texts.english, "en-IN");
-  await speakAnnouncement(item.texts.hindi, "hi-IN");
+  for (const language of selectedAnnouncementLanguages()) {
+    await speakAnnouncement(item.texts[language.key], language.code);
+  }
   state.announcementBusy = false;
   setActiveAnnouncement(null);
   processAnnouncementQueue();
@@ -2184,6 +2247,8 @@ function bindEvents() {
     els.autoPaButton.classList.toggle("active", state.autoPaEnabled);
     els.autoPaButton.textContent = state.autoPaEnabled ? "Auto PA On" : "Auto PA Off";
   });
+  els.englishPaButton.addEventListener("click", () => togglePaLanguage("english"));
+  els.hindiPaButton.addEventListener("click", () => togglePaLanguage("hindi"));
   els.ambienceFile.addEventListener("change", () => {
     const file = els.ambienceFile.files?.[0];
     if (!file) {
