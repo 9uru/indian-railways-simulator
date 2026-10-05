@@ -1,6 +1,7 @@
 # load data from csv and convert to python objects
 import datetime
 import time
+import warnings
 from typing import Dict, List, Tuple
 
 import pandas as pd
@@ -55,10 +56,30 @@ def load_data(filename: str) -> Tuple[Dict[int, Train], Dict[str, Station]]:
         "Type": str,
     }
 
-    df = pd.read_csv(filename, dtype=dtype, low_memory=False).dropna()
+    df = pd.read_csv(filename, dtype=dtype, low_memory=False)
+    missing_columns = [c for c in dtype if c not in df.columns]
+    if missing_columns:
+        raise ValueError(
+            f"Missing required CSV columns: {', '.join(missing_columns)}"
+        )
+
+    dropped_count = len(df) - df.dropna().shape[0]
+    df = df.dropna()
+    if dropped_count:
+        warnings.warn(f"Dropped {dropped_count} row(s) with missing values")
+    if df.empty:
+        raise ValueError("No data rows remain after validation")
 
     # Parse the Time column outside the loop
-    df["Time"] = pd.to_datetime(df["Time"], format="%H:%M:%S").dt.time
+    parsed_time = pd.to_datetime(
+        df["Time"], format="%H:%M:%S", errors="coerce"
+    )
+    bad_time_count = int(parsed_time.isna().sum())
+    if bad_time_count:
+        warnings.warn(
+            f"{bad_time_count} row(s) had unparseable Time values"
+        )
+    df["Time"] = parsed_time.dt.time
 
     # Initialize dictionaries
     trains_by_number: Dict[int, Train] = {}
@@ -162,9 +183,11 @@ def load_data(filename: str) -> Tuple[Dict[int, Train], Dict[str, Station]]:
 
         trains_by_number[int(train_no)] = train
 
-    # Sort events of stations by time
+    # Sort station events chronologically: day_offset first, then wall-clock time
     for station in stations_by_code.values():
-        station.events = sorted(station.events, key=lambda x: x.time)
+        station.events = sorted(
+            station.events, key=lambda x: (x.day_offset, x.time)
+        )
 
     return trains_by_number, stations_by_code
 
@@ -174,6 +197,11 @@ def simulate_events(events: List[Event], cadence: float, use_day_offsets: bool =
         return
 
     service_date = datetime.date.today()
+    # Self-sort by absolute scheduled datetime so simulation always starts at the
+    # earliest event, regardless of the order the caller supplied.
+    events = sorted(
+        events, key=lambda e: scheduled_datetime(e, service_date, use_day_offsets)
+    )
     simulated_time = scheduled_datetime(events[0], service_date, use_day_offsets)
     event_index = 0
     last_output_length = 0
