@@ -229,6 +229,7 @@ h1 {
   width: 100%;
 }
 
+.quick-trains,
 .quick-stations,
 .camera-panel,
 .pa-language-panel {
@@ -236,6 +237,7 @@ h1 {
   gap: 8px;
 }
 
+.quick-trains > span,
 .quick-stations > span,
 .camera-panel > span,
 .pa-language-panel > span {
@@ -246,6 +248,7 @@ h1 {
   text-transform: uppercase;
 }
 
+.quick-train-grid,
 .quick-station-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -259,6 +262,11 @@ h1 {
   gap: 8px;
 }
 
+.pa-language-toggles {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.quick-train-grid button,
 .quick-station-grid button,
 .camera-modes button,
 .pa-language-toggles button {
@@ -270,6 +278,7 @@ h1 {
   white-space: nowrap;
 }
 
+.quick-train-grid button.active,
 .quick-station-grid button.active,
 .camera-modes button.active,
 .pa-language-toggles button.active {

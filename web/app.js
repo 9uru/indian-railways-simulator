@@ -21,6 +21,14 @@ const FEATURED_STATION_CODES = [
   "BCT",
   "BZA",
 ];
+const FEATURED_TRAIN_NUMBERS = [
+  "12631",
+  "12632",
+  "11028",
+  "11027",
+  "12007",
+  "12008",
+];
 const STATION_DISPLAY_NAMES = {
   MAS: "Chennai Central",
   NDLS: "New Delhi",
@@ -107,6 +115,7 @@ const state = {
   paLanguages: {
     english: true,
     hindi: false,
+    tamil: false,
   },
   autoPaEnabled: true,
   autoPaLastAt: 0,
@@ -137,6 +146,7 @@ const els = {
   stationModeButton: document.querySelector("#stationModeButton"),
   trainSearch: document.querySelector("#trainSearch"),
   trainOptions: document.querySelector("#trainOptions"),
+  featuredTrains: document.querySelector("#featuredTrains"),
   stationSearch: document.querySelector("#stationSearch"),
   stationOptions: document.querySelector("#stationOptions"),
   featuredStations: document.querySelector("#featuredStations"),
@@ -148,6 +158,7 @@ const els = {
   autoPaButton: document.querySelector("#autoPaButton"),
   englishPaButton: document.querySelector("#englishPaButton"),
   hindiPaButton: document.querySelector("#hindiPaButton"),
+  tamilPaButton: document.querySelector("#tamilPaButton"),
   ambienceFile: document.querySelector("#ambienceFile"),
   speedSlider: document.querySelector("#speedSlider"),
   speedLabel: document.querySelector("#speedLabel"),
@@ -354,6 +365,10 @@ function fitLabel(text, max = 28) {
   return text.length > max ? `${text.slice(0, max - 1)}...` : text;
 }
 
+function trainDisplayName(train) {
+  return train?.name || "Unknown train";
+}
+
 function stationDisplayName(station) {
   if (!station) {
     return "Unknown station";
@@ -380,15 +395,24 @@ async function loadInitialData() {
 
 function populateOptions() {
   const trainFragment = document.createDocumentFragment();
-  Object.values(state.trains)
+  const featuredTrains = FEATURED_TRAIN_NUMBERS.map((trainNo) => state.trains[trainNo]).filter(
+    (train) => train?.mappedRoute.length >= 2,
+  );
+  const listedTrains = Object.values(state.trains)
     .filter((train) => train.mappedRoute.length >= 2)
-    .slice(0, 900)
+    .slice(0, 900);
+  [...featuredTrains, ...listedTrains]
+    .filter(
+      (train, index, trains) =>
+        trains.findIndex((candidate) => candidate.trainNo === train.trainNo) === index,
+    )
     .forEach((train) => {
       const option = document.createElement("option");
-      option.value = `${train.trainNo} - ${train.name}`;
+      option.value = `${train.trainNo} - ${trainDisplayName(train)}`;
       trainFragment.append(option);
     });
   els.trainOptions.replaceChildren(trainFragment);
+  populateFeaturedTrains(featuredTrains);
 
   const stationFragment = document.createDocumentFragment();
   const featuredStations = FEATURED_STATION_CODES.map((code) => state.stations[code])
@@ -409,6 +433,19 @@ function populateOptions() {
     });
   els.stationOptions.replaceChildren(stationFragment);
   populateFeaturedStations(featuredStations);
+}
+
+function populateFeaturedTrains(trains) {
+  const fragment = document.createDocumentFragment();
+  trains.forEach((train) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.trainNo = train.trainNo;
+    button.textContent = `${train.trainNo} ${fitLabel(trainDisplayName(train), 16)}`;
+    button.classList.toggle("active", train.trainNo === state.selectedTrainNo);
+    fragment.append(button);
+  });
+  els.featuredTrains.replaceChildren(fragment);
 }
 
 function populateFeaturedStations(stations) {
@@ -456,13 +493,16 @@ async function selectTrain(value) {
     return;
   }
   state.selectedTrainNo = trainNo;
-  els.trainSearch.value = `${train.trainNo} - ${train.name}`;
+  els.trainSearch.value = `${train.trainNo} - ${trainDisplayName(train)}`;
   const response = await fetch(`${DATA_ROOT}/${train.eventsPath}`);
   const payload = await response.json();
   state.trainEvents = payload.events;
   resetClock();
   renderDetails();
   updateHeader();
+  els.featuredTrains.querySelectorAll("button").forEach((button) => {
+    button.classList.toggle("active", button.dataset.trainNo === trainNo);
+  });
 }
 
 async function selectStation(value) {
@@ -641,6 +681,11 @@ function routeTerminalName(event, key, fallback) {
   return event[key] || fallback || "its terminal station";
 }
 
+function eventStationName(event) {
+  const station = state.stations[event.stationCode];
+  return stationDisplayName(station) || event.destinationStation || event.sourceStation || "this station";
+}
+
 function majorRoutePhrase(event) {
   const majors = event.majorRouteStations || [];
   if (majors.length === 0) {
@@ -676,19 +721,44 @@ function announcementTexts(event) {
     "routeDestination",
     event.destinationStation,
   );
+  const station = eventStationName(event);
   const via = majorRoutePhrase(event);
+  const arrivingAt = state.mode === "train"
+    ? `is arriving at ${station}, platform number ${platform}, at ${time}.`
+    : `is arriving at platform number ${platform} at ${time}.`;
+  const departingFrom = state.mode === "train"
+    ? `will depart from ${station}, platform number ${platform}, at ${time}.`
+    : `will depart from platform number ${platform} at ${time}.`;
+  const hindiArrivalPlatform = state.mode === "train"
+    ? `${station} station ke platform sankhya ${platform} par ${time} baje aa rahi hai.`
+    : `platform sankhya ${platform} par ${time} baje aa rahi hai.`;
+  const hindiDeparturePlatform = state.mode === "train"
+    ? `${station} station ke platform sankhya ${platform} se ${time} baje prasthan karegi.`
+    : `platform sankhya ${platform} se ${time} baje prasthan karegi.`;
+  const tamilArrivalPlatform = state.mode === "train"
+    ? `${station} நிலையத்தின் நடைமேடை எண் ${platform}-க்கு ${time} மணிக்கு வந்து கொண்டிருக்கிறது.`
+    : `நடைமேடை எண் ${platform}-க்கு ${time} மணிக்கு வந்து கொண்டிருக்கிறது.`;
+  const tamilDeparturePlatform = state.mode === "train"
+    ? `${station} நிலையத்தின் நடைமேடை எண் ${platform}-இல் இருந்து ${time} மணிக்கு புறப்படும்.`
+    : `நடைமேடை எண் ${platform}-இல் இருந்து ${time} மணிக்கு புறப்படும்.`;
 
   if (event.type === "Arrival") {
     return {
       english: [
         "May I have your attention please.",
-        `${train}, from ${origin} to ${destination}${via}, is arriving at platform number ${platform} at ${time}.`,
+        `${train}, from ${origin} to ${destination}${via}, ${arrivingAt}`,
         "Passengers are requested to stand behind the yellow line.",
       ].join(" "),
       hindi: [
         "Yatrigan kripya dhyan dijiye.",
         `${origin} se chalkar ${destination} ko jaane wali ${hindiTrain}`,
-        `platform sankhya ${platform} par ${time} baje aa rahi hai.`,
+        hindiArrivalPlatform,
+      ].join(" "),
+      tamil: [
+        "பயணிகள் தயவு செய்து கவனிக்கவும்.",
+        `${origin} நிலையத்திலிருந்து ${destination} நிலையம் செல்லும் ரயில் எண் ${trainNo}, ${event.trainName},`,
+        tamilArrivalPlatform,
+        "பயணிகள் மஞ்சள் கோட்டிற்கு பின்னால் நிற்கவும்.",
       ].join(" "),
     };
   }
@@ -696,13 +766,19 @@ function announcementTexts(event) {
   return {
     english: [
       "May I have your attention please.",
-      `${train}, from ${origin} to ${destination}${via}, will depart from platform number ${platform} at ${time}.`,
+      `${train}, from ${origin} to ${destination}${via}, ${departingFrom}`,
       "Passengers are requested to board the train and mind their belongings.",
     ].join(" "),
     hindi: [
       "Yatrigan kripya dhyan dijiye.",
       `${origin} se ${destination} ko jaane wali ${hindiTrain}`,
-      `platform sankhya ${platform} se ${time} baje prasthan karegi.`,
+      hindiDeparturePlatform,
+    ].join(" "),
+    tamil: [
+      "பயணிகள் தயவு செய்து கவனிக்கவும்.",
+      `${origin} நிலையத்திலிருந்து ${destination} நிலையம் செல்லும் ரயில் எண் ${trainNo}, ${event.trainName},`,
+      tamilDeparturePlatform,
+      "பயணிகள் ரயிலில் ஏறி தங்கள் உடமைகளை கவனமாக பார்த்துக்கொள்ளவும்.",
     ].join(" "),
   };
 }
@@ -799,6 +875,9 @@ function selectedAnnouncementLanguages() {
   }
   if (state.paLanguages.hindi) {
     languages.push({ key: "hindi", code: "hi-IN" });
+  }
+  if (state.paLanguages.tamil) {
+    languages.push({ key: "tamil", code: "ta-IN" });
   }
   return languages.length ? languages : [{ key: "english", code: "en-IN" }];
 }
@@ -975,6 +1054,85 @@ function displayedStationPlatforms() {
     Math.max(0, focusIndex - radius),
     Math.min(platforms.length, focusIndex + radius + 1),
   );
+}
+
+function dominantStationAnimation() {
+  const active = activeStationAnimations();
+  if (active.length === 0) {
+    return null;
+  }
+  if (state.activeStationEvent) {
+    const key = announcementKey(state.activeStationEvent, announcementScope());
+    const announced = active.find(
+      (animation) => announcementKey(animation.event, announcementScope()) === key,
+    );
+    if (announced) {
+      return announced;
+    }
+  }
+  return active
+    .slice()
+    .sort((a, b) => stationAnimationPriority(b) - stationAnimationPriority(a))[0];
+}
+
+function stationAnimationPriority(animation) {
+  const phaseWeight = {
+    departing: 4,
+    boarding: 3,
+    arriving: 2,
+    dwell: 1,
+  }[animation.phase] || 0;
+  const deltaWeight = 1 / (1 + Math.abs(minutesFromEvent(animation.event) - state.currentMinutes));
+  return phaseWeight + deltaWeight;
+}
+
+function platformTrackY(platform, platforms, floorStart) {
+  const index = Math.max(0, platforms.indexOf(platform));
+  return floorStart - 44 - Math.max(0, platforms.length - index - 1) * 8;
+}
+
+function crowdTargetForPerson(person, index, animation, platforms, width, height, floorStart) {
+  const platform = animation ? platformForEvent(animation.event) : focusedStationPlatform(platforms);
+  const trackY = clamp(platformTrackY(platform, platforms, floorStart), 120, height - 34);
+  const lane = (index % 9) - 4;
+  const group = Math.floor(index / 9) % 4;
+  const doorX = width * (0.24 + (index % 6) * 0.09);
+  const concourseX = width * (0.12 + (index % 10) * 0.075);
+  const concourseY = clamp(floorStart + 20 + (index % 4) * 18, 130, height - 28);
+
+  if (!animation) {
+    return { x: concourseX, y: concourseY, pull: state.stationCamera === "crowd" ? 0.14 : 0.04 };
+  }
+  if (animation.phase === "boarding") {
+    return {
+      x: clamp(doorX + lane * 9, 40, width - 40),
+      y: clamp(trackY + 20 + group * 8, 120, height - 28),
+      pull: 0.32,
+    };
+  }
+  if (animation.phase === "arriving") {
+    return {
+      x: clamp(width * 0.2 + (index % 12) * 42, 40, width - 40),
+      y: clamp(trackY + 34 + lane * 4, 120, height - 28),
+      pull: 0.22 + animation.progress * 0.08,
+    };
+  }
+  if (animation.phase === "dwell") {
+    const scatterSide = index % 2 === 0 ? -1 : 1;
+    return {
+      x: clamp(width * 0.5 + scatterSide * (80 + (index % 7) * 32), 40, width - 40),
+      y: clamp(trackY + 52 + (index % 5) * 10, 120, height - 28),
+      pull: 0.16,
+    };
+  }
+  if (animation.phase === "departing") {
+    return {
+      x: clamp(width * 0.16 + (index % 8) * 58, 40, width - 40),
+      y: clamp(trackY + 42 + lane * 5 + animation.progress * 52, 120, height - 28),
+      pull: 0.18 * (1 - animation.progress) + 0.06,
+    };
+  }
+  return { x: concourseX, y: concourseY, pull: 0.08 };
 }
 
 function stationBoardEvents(limit = 5) {
@@ -1197,11 +1355,12 @@ function updateMomentPanel(position) {
 function updatePaLanguageButtons() {
   els.englishPaButton.classList.toggle("active", state.paLanguages.english);
   els.hindiPaButton.classList.toggle("active", state.paLanguages.hindi);
+  els.tamilPaButton.classList.toggle("active", state.paLanguages.tamil);
 }
 
 function togglePaLanguage(language) {
   state.paLanguages[language] = !state.paLanguages[language];
-  if (!state.paLanguages.english && !state.paLanguages.hindi) {
+  if (!state.paLanguages.english && !state.paLanguages.hindi && !state.paLanguages.tamil) {
     state.paLanguages.english = true;
   }
   updatePaLanguageButtons();
@@ -1819,10 +1978,8 @@ function drawFullStationCrowd(deltaSeconds, moment, floorStart) {
   const width = els.canvas.width;
   const height = els.canvas.height;
   const activity = (state.stationCamera === "crowd" ? 1.35 : 0.8) + moment.intensity * 2;
-  const focusedPlatform = focusedStationPlatform();
   const platforms = displayedStationPlatforms();
-  const focusIndex = Math.max(0, platforms.indexOf(focusedPlatform));
-  const focusY = floorStart - 44 - Math.max(0, platforms.length - focusIndex - 1) * 8;
+  const animation = dominantStationAnimation();
   state.vendors.forEach((vendor) => {
     ctx.fillStyle = vendor.color;
     ctx.fillRect(vendor.x - 22, vendor.y - 18, 44, 24);
@@ -1830,12 +1987,18 @@ function drawFullStationCrowd(deltaSeconds, moment, floorStart) {
     ctx.fillRect(vendor.x - 28, vendor.y - 26, 56, 8);
   });
   state.people.forEach((person, index) => {
-    if (moment.intensity > 0.45 || state.stationCamera === "crowd") {
-      const targetX = width * (0.18 + (index % 7) * 0.095);
-      const targetY = clamp(focusY + ((index % 5) - 2) * 14, 120, height - 30);
-      person.x += (targetX - person.x) * deltaSeconds * 0.18 * activity;
-      person.y += (targetY - person.y) * deltaSeconds * 0.12 * activity;
-    }
+    const target = crowdTargetForPerson(
+      person,
+      index,
+      animation,
+      platforms,
+      width,
+      height,
+      floorStart,
+    );
+    const eventPull = target.pull * activity * deltaSeconds;
+    person.x += (target.x - person.x) * eventPull;
+    person.y += (target.y - person.y) * eventPull * 0.72;
     person.x += person.direction * person.speed * activity * deltaSeconds;
     if (person.x < 36 || person.x > width - 36) {
       person.direction *= -1;
@@ -1843,12 +2006,26 @@ function drawFullStationCrowd(deltaSeconds, moment, floorStart) {
     if (person.y < floorStart - 36 || person.y > height - 28) {
       person.y = floorStart + Math.random() * Math.max(40, height - floorStart - 48);
     }
-    const bounce = Math.sin(performance.now() / 140 + index) * moment.intensity * (state.stationCamera === "crowd" ? 2 : 1);
+    const phaseEnergy =
+      animation?.phase === "boarding" || animation?.phase === "departing"
+        ? 1.4
+        : animation?.phase === "dwell"
+          ? 1.1
+          : 1;
+    const bounce =
+      Math.sin(performance.now() / 140 + index) *
+      moment.intensity *
+      phaseEnergy *
+      (state.stationCamera === "crowd" ? 2 : 1);
     ctx.fillStyle = person.color;
     ctx.beginPath();
     ctx.arc(person.x, person.y - 14 + bounce, state.stationCamera === "crowd" ? 6 : 5, 0, Math.PI * 2);
     ctx.fill();
     ctx.fillRect(person.x - 4, person.y - 9 + bounce, state.stationCamera === "crowd" ? 9 : 8, state.stationCamera === "crowd" ? 20 : 18);
+    if (animation && index % 3 === 0) {
+      ctx.fillStyle = "#d7d0c4";
+      ctx.fillRect(person.x + person.direction * 5, person.y + 5 + bounce, 5, 4);
+    }
   });
 }
 
@@ -2018,8 +2195,27 @@ function playAnnouncementChime() {
   });
 }
 
-function voiceForLanguage(language) {
-  const voices = window.speechSynthesis?.getVoices?.() || [];
+function speechVoicesReady(timeoutMs = 900) {
+  return new Promise((resolve) => {
+    if (!("speechSynthesis" in window)) {
+      resolve([]);
+      return;
+    }
+    const currentVoices = window.speechSynthesis.getVoices();
+    if (currentVoices.length > 0) {
+      resolve(currentVoices);
+      return;
+    }
+    const finish = () => {
+      window.speechSynthesis.removeEventListener("voiceschanged", finish);
+      resolve(window.speechSynthesis.getVoices());
+    };
+    window.speechSynthesis.addEventListener("voiceschanged", finish, { once: true });
+    window.setTimeout(finish, timeoutMs);
+  });
+}
+
+function voiceForLanguage(language, voices = window.speechSynthesis?.getVoices?.() || []) {
   const normalized = language.toLowerCase();
   if (normalized.startsWith("hi")) {
     return (
@@ -2028,6 +2224,9 @@ function voiceForLanguage(language) {
       voices.find((candidate) => candidate.lang?.toLowerCase().startsWith("en"))
     );
   }
+  if (normalized.startsWith("ta")) {
+    return voices.find((candidate) => candidate.lang?.toLowerCase().startsWith("ta"));
+  }
   return (
     voices.find((candidate) => candidate.lang?.toLowerCase().startsWith("en-in")) ||
     voices.find((candidate) => candidate.lang?.toLowerCase().startsWith("en"))
@@ -2035,21 +2234,22 @@ function voiceForLanguage(language) {
 }
 
 function speakAnnouncement(text, language) {
-  return new Promise((resolve) => {
+  return new Promise(async (resolve) => {
     if (!("speechSynthesis" in window) || !window.SpeechSynthesisUtterance) {
       resolve();
       return;
     }
 
     const utterance = new SpeechSynthesisUtterance(text);
-    const voice = voiceForLanguage(language);
+    const voices = await speechVoicesReady();
+    const voice = voiceForLanguage(language, voices);
     if (voice) {
       utterance.voice = voice;
       utterance.lang = voice.lang;
     } else {
       utterance.lang = language;
     }
-    utterance.rate = language.startsWith("hi") ? 0.86 : 0.92;
+    utterance.rate = language.startsWith("hi") || language.startsWith("ta") ? 0.86 : 0.92;
     utterance.pitch = 1.02;
     utterance.volume = 1;
     utterance.onend = resolve;
@@ -2193,6 +2393,14 @@ function bindEvents() {
   els.stationSearch.addEventListener("change", () => {
     selectStation(els.stationSearch.value);
   });
+  els.featuredTrains.addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-train-no]");
+    if (!button) {
+      return;
+    }
+    setMode("train");
+    selectTrain(button.dataset.trainNo);
+  });
   els.featuredStations.addEventListener("click", (event) => {
     const button = event.target.closest("button[data-station-code]");
     if (!button) {
@@ -2249,6 +2457,7 @@ function bindEvents() {
   });
   els.englishPaButton.addEventListener("click", () => togglePaLanguage("english"));
   els.hindiPaButton.addEventListener("click", () => togglePaLanguage("hindi"));
+  els.tamilPaButton.addEventListener("click", () => togglePaLanguage("tamil"));
   els.ambienceFile.addEventListener("change", () => {
     const file = els.ambienceFile.files?.[0];
     if (!file) {
