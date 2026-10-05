@@ -7,6 +7,7 @@ from scripts.export_game_data import (
     is_major_station,
     major_route_stations,
     route_station_codes,
+    serialize_event,
     train_number_keys,
 )
 from src.parse import _remove_terminal_placeholders, _segment_distance
@@ -56,6 +57,31 @@ def test_major_route_stations_filters_terminals_and_limits_results():
         {"code": "B", "name": "North JN", "routeIndex": 2},
         {"code": "C", "name": "Central JN", "routeIndex": 3},
     ]
+
+
+def test_serialize_event_omits_train_level_and_unused_fields():
+    event = Event(
+        "123",
+        "Source Name",
+        time(10, 0),
+        EventType.DEPARTURE,
+        station_code="AAA",
+        source_station_code="AAA",
+        destination_station_code="BBB",
+    )
+
+    serialized = serialize_event(
+        event,
+        {},
+        ["AAA", "BBB"],
+        "Origin",
+        "Destination",
+        [{"code": "MID", "name": "Middle JN", "routeIndex": 1}],
+    )
+
+    assert serialized["trainName"] == "Source Name"
+    assert "sourceTrainName" not in serialized
+    assert "majorRouteStations" not in serialized
 
 
 def test_route_station_codes_skips_transits_and_duplicate_stations():

@@ -138,7 +138,6 @@ def serialize_event(
     return {
         "trainNo": event.train_no,
         "trainName": display_train_name(event.train_no, event.train_name, train_names),
-        "sourceTrainName": event.train_name,
         "type": event.event_type.value,
         "time": event.time.isoformat(),
         "dayOffset": event.day_offset,
@@ -154,7 +153,6 @@ def serialize_event(
         "routeIndex": route.index(event.station_code)
         if event.station_code in route
         else None,
-        "majorRouteStations": major_stations,
         "distanceKm": event.distance,
     }
 

@@ -725,8 +725,8 @@ function eventStationName(event) {
   return stationDisplayName(station) || event.destinationStation || event.sourceStation || "this station";
 }
 
-function majorRoutePhrase(event) {
-  const majors = event.majorRouteStations || [];
+function majorRoutePhrase(event, train) {
+  const majors = train?.majorRouteStations || [];
   if (majors.length === 0) {
     return "";
   }
@@ -761,7 +761,7 @@ function announcementTexts(event) {
     event.destinationStation,
   );
   const station = eventStationName(event);
-  const via = majorRoutePhrase(event);
+  const via = majorRoutePhrase(event, state.trains[event.trainNo]);
   const arrivingAt = state.mode === "train"
     ? `is arriving at ${station}, platform number ${platform}, at ${time}.`
     : `is arriving at platform number ${platform} at ${time}.`;
