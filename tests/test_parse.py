@@ -1,6 +1,9 @@
 import datetime
 
+import pytest
+
 from src.parse import load_data, scheduled_datetime
+from src.types import Event
 from src.types import EventType
 
 
@@ -15,6 +18,43 @@ def write_timetable(tmp_path, rows):
     path = tmp_path / "timetable.csv"
     path.write_text(CSV_HEADER + "\n".join(rows) + "\n")
     return path
+
+
+@pytest.mark.parametrize(
+    ("event_time", "day_offset", "use_day_offset", "expected"),
+    [
+        (
+            datetime.time(23, 30),
+            0,
+            True,
+            datetime.datetime(2026, 5, 1, 23, 30),
+        ),
+        (
+            datetime.time(1, 15),
+            1,
+            True,
+            datetime.datetime(2026, 5, 2, 1, 15),
+        ),
+        (
+            datetime.time(1, 15),
+            1,
+            False,
+            datetime.datetime(2026, 5, 1, 1, 15),
+        ),
+    ],
+)
+def test_scheduled_datetime(event_time, day_offset, use_day_offset, expected):
+    event = Event(
+        train_no="123",
+        train_name="Test Train",
+        time=event_time,
+        event_type=EventType.ARRIVAL,
+        day_offset=day_offset,
+    )
+
+    assert scheduled_datetime(
+        event, datetime.date(2026, 5, 1), use_day_offset
+    ) == expected
 
 
 def test_load_data_skips_terminal_placeholder_events(tmp_path):
