@@ -2,9 +2,10 @@ import datetime
 
 import pytest
 
+import src.cli as cli_module
+import src.parse as parse_module
 from src.parse import load_data, scheduled_datetime
-from src.types import Event
-from src.types import EventType
+from src.types import Event, EventType
 
 
 CSV_HEADER = (
@@ -55,6 +56,103 @@ def test_scheduled_datetime(event_time, day_offset, use_day_offset, expected):
     assert scheduled_datetime(
         event, datetime.date(2026, 5, 1), use_day_offset
     ) == expected
+
+
+def fixed_service_date(monkeypatch):
+    date_type = datetime.date
+
+    class FixedDate(date_type):
+        @classmethod
+        def today(cls):
+            return cls(2026, 5, 1)
+
+    monkeypatch.setattr(parse_module.datetime, "date", FixedDate)
+
+
+def test_simulate_events_sorts_out_of_order_events(monkeypatch):
+    events = [
+        Event("123", "Late", datetime.time(23, 30), EventType.ARRIVAL),
+        Event(
+            "123",
+            "Early next day",
+            datetime.time(1, 0),
+            EventType.ARRIVAL,
+            day_offset=1,
+        ),
+    ]
+    fixed_service_date(monkeypatch)
+    emitted = []
+    monkeypatch.setattr(
+        parse_module, "print", lambda *args, **kwargs: None, raising=False
+    )
+    monkeypatch.setattr(
+        parse_module,
+        "print_formatted_text",
+        lambda value, **kwargs: emitted.append(str(value)),
+    )
+    monkeypatch.setattr(parse_module.time, "sleep", lambda seconds: None)
+
+    parse_module.simulate_events(events, cadence=1)
+
+    event_output = [line for line in emitted if "Train number" in line]
+    assert "Late" in event_output[0]
+    assert "Early next day" in event_output[1]
+
+
+@pytest.mark.parametrize(
+    ("use_day_offsets", "expected_day"),
+    [(True, datetime.date(2026, 5, 2)), (False, datetime.date(2026, 5, 1))],
+)
+def test_simulate_events_respects_day_offset_flag(
+    monkeypatch, use_day_offsets, expected_day
+):
+    event = Event(
+        "123",
+        "Overnight",
+        datetime.time(1, 0),
+        EventType.ARRIVAL,
+        day_offset=1,
+    )
+    fixed_service_date(monkeypatch)
+    clock_values = []
+    monkeypatch.setattr(parse_module, "print", lambda *args, **kwargs: None, raising=False)
+    monkeypatch.setattr(
+        parse_module,
+        "print_formatted_text",
+        lambda value, **kwargs: clock_values.append(str(value)),
+    )
+    monkeypatch.setattr(parse_module.time, "sleep", lambda seconds: None)
+
+    parse_module.simulate_events([event], cadence=1, use_day_offsets=use_day_offsets)
+
+    assert any(str(expected_day) in value for value in clock_values)
+
+
+def test_simulate_events_uses_skip_cadence_between_event_times(monkeypatch):
+    events = [
+        Event("123", "First", datetime.time(10, 0), EventType.ARRIVAL),
+        Event("123", "Second", datetime.time(10, 2), EventType.ARRIVAL),
+    ]
+    fixed_service_date(monkeypatch)
+    monkeypatch.setattr(
+        parse_module, "print", lambda *args, **kwargs: None, raising=False
+    )
+    monkeypatch.setattr(
+        parse_module, "print_formatted_text", lambda *args, **kwargs: None
+    )
+    sleeps = []
+    monkeypatch.setattr(parse_module.time, "sleep", sleeps.append)
+
+    parse_module.simulate_events(events, cadence=2)
+
+    assert sleeps == [10.0, 10.0]
+
+
+def test_parse_main_forwards_to_cli(monkeypatch):
+    monkeypatch.setattr(cli_module, "load_data", lambda filename: ({}, {}))
+    monkeypatch.setattr(cli_module, "prompt", lambda *args, **kwargs: "quit")
+
+    parse_module.main()
 
 
 def test_load_data_skips_terminal_placeholder_events(tmp_path):
