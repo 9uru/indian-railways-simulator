@@ -376,21 +376,38 @@ function stationDisplayName(station) {
   return STATION_DISPLAY_NAMES[station.code] || station.name;
 }
 
-async function loadInitialData() {
-  const [stationsResponse, trainsResponse] = await Promise.all([
-    fetch(`${DATA_ROOT}/stations.json`),
-    fetch(`${DATA_ROOT}/train_summaries.json`),
-  ]);
-  const stationPayload = await stationsResponse.json();
-  const trainPayload = await trainsResponse.json();
-  state.stations = stationPayload.stations;
-  state.trains = trainPayload.trains;
+async function fetchJson(path) {
+  const response = await fetch(`${DATA_ROOT}/${path}`);
+  if (!response.ok) {
+    throw new Error(`Request failed (${response.status})`);
+  }
+  return response.json();
+}
 
-  populateOptions();
-  await selectTrain("107");
-  await selectStation("NDLS");
-  setMode("train");
-  resetClock();
+function showLoadError(message) {
+  els.momentLabel.textContent = "Data unavailable";
+  els.momentTitle.textContent = message;
+  els.momentMeta.textContent = "Check the data files or connection, then reload the page.";
+}
+
+async function loadInitialData() {
+  try {
+    const [stationPayload, trainPayload] = await Promise.all([
+      fetchJson("stations.json"),
+      fetchJson("train_summaries.json"),
+    ]);
+    state.stations = stationPayload.stations;
+    state.trains = trainPayload.trains;
+
+    populateOptions();
+    await selectTrain("107");
+    await selectStation("NDLS");
+    setMode("train");
+    resetClock();
+  } catch (error) {
+    console.error(error);
+    showLoadError("Could not load railway data.");
+  }
 }
 
 function populateOptions() {
@@ -492,17 +509,21 @@ async function selectTrain(value) {
   if (!train) {
     return;
   }
-  state.selectedTrainNo = trainNo;
-  els.trainSearch.value = `${train.trainNo} - ${trainDisplayName(train)}`;
-  const response = await fetch(`${DATA_ROOT}/${train.eventsPath}`);
-  const payload = await response.json();
-  state.trainEvents = payload.events;
-  resetClock();
-  renderDetails();
-  updateHeader();
-  els.featuredTrains.querySelectorAll("button").forEach((button) => {
-    button.classList.toggle("active", button.dataset.trainNo === trainNo);
-  });
+  try {
+    const payload = await fetchJson(train.eventsPath);
+    state.selectedTrainNo = trainNo;
+    state.trainEvents = payload.events;
+    els.trainSearch.value = `${train.trainNo} - ${trainDisplayName(train)}`;
+    resetClock();
+    renderDetails();
+    updateHeader();
+    els.featuredTrains.querySelectorAll("button").forEach((button) => {
+      button.classList.toggle("active", button.dataset.trainNo === trainNo);
+    });
+  } catch (error) {
+    console.error(error);
+    showLoadError(`Could not load train ${trainNo}.`);
+  }
 }
 
 async function selectStation(value) {
@@ -511,14 +532,17 @@ async function selectStation(value) {
   if (!station) {
     return;
   }
-  state.selectedStationCode = code;
-  els.stationSearch.value = `${station.code} - ${stationDisplayName(station)}`;
-  if (station.eventsPath) {
-    const response = await fetch(`${DATA_ROOT}/${station.eventsPath}`);
-    const payload = await response.json();
+  try {
+    const payload = station.eventsPath
+      ? await fetchJson(station.eventsPath)
+      : { events: [] };
+    state.selectedStationCode = code;
     state.stationEvents = payload.events;
-  } else {
-    state.stationEvents = [];
+    els.stationSearch.value = `${station.code} - ${stationDisplayName(station)}`;
+  } catch (error) {
+    console.error(error);
+    showLoadError(`Could not load station ${code}.`);
+    return;
   }
   state.announcedEvents.clear();
   state.autoPaIndex = 0;
@@ -608,11 +632,19 @@ function renderDetails() {
           Math.abs(minutesFromEvent(event) - state.currentMinutes) <= 2,
       );
       item.classList.toggle("active", active);
-      item.innerHTML = `<span class="code">${code}</span><span>${fitLabel(
-          stationDisplayName(station),
-      )}<br><span class="meta">${times || "No scheduled stop time"}${
+      const stationCode = document.createElement("span");
+      stationCode.className = "code";
+      stationCode.textContent = code;
+      const description = document.createElement("span");
+      description.append(document.createTextNode(fitLabel(stationDisplayName(station))));
+      description.append(document.createElement("br"));
+      const metadata = document.createElement("span");
+      metadata.className = "meta";
+      metadata.textContent = `${times || "No scheduled stop time"}${
         station?.lat == null ? " · No coordinates" : ""
-      }</span></span>`;
+      }`;
+      description.append(metadata);
+      item.append(stationCode, description);
       list.append(item);
     });
     els.detailBody.replaceChildren(list);
@@ -643,15 +675,22 @@ function renderDetails() {
     const key = announcementKey(event, announcementScope());
     item.dataset.eventKey = key;
     item.classList.toggle("active", key === state.activeAnnouncementKey);
-    item.innerHTML = `<span class="code">${event.time.slice(
-      0,
-      5,
-    )}</span><span>${event.type} ${event.trainNo}<br><span class="meta">Platform ${platformForEvent(
-      event,
-    )} · ${fitLabel(
+    const eventTime = document.createElement("span");
+    eventTime.className = "code";
+    eventTime.textContent = event.time.slice(0, 5);
+    const description = document.createElement("span");
+    description.append(
+      document.createTextNode(`${event.type} ${event.trainNo}`),
+      document.createElement("br"),
+    );
+    const metadata = document.createElement("span");
+    metadata.className = "meta";
+    metadata.textContent = `Platform ${platformForEvent(event)} · ${fitLabel(
       event.trainName,
       32,
-    )}</span></span>`;
+    )}`;
+    description.append(metadata);
+    item.append(eventTime, description);
     list.append(item);
   });
   els.detailBody.replaceChildren(list);
